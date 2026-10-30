@@ -1,0 +1,8 @@
+{
+  "name": "compat",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "faktory-worker": "^4.7.0"
+  }
+}

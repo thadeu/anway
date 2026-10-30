@@ -1,0 +1,9 @@
+.plans/
+.claude/
+data/
+bin/
+.env
+test/compat/node/node_modules/
+test/compat/ruby/vendor/
+test/compat/ruby/.bundle/
+conf.d/

@@ -1,0 +1,21 @@
+GEM
+  remote: https://rubygems.org/
+  specs:
+    connection_pool (3.0.2)
+    faktory_worker_ruby (2.2.0)
+      connection_pool (< 4)
+
+PLATFORMS
+  arm64-darwin-27
+  ruby
+
+DEPENDENCIES
+  faktory_worker_ruby
+
+CHECKSUMS
+  bundler (4.0.20) sha256=7978a8ac648767f5e635bc522445b79e80a52b907a39a36c2d8085ed6bc762ae
+  connection_pool (3.0.2) sha256=33fff5ba71a12d2aa26cb72b1db8bba2a1a01823559fb01d29eb74c286e62e0a
+  faktory_worker_ruby (2.2.0) sha256=8222041ca58814a6d63aebcd9af036522160ffcacfe2100b2d9d0de5c50c60f9
+
+BUNDLED WITH
+  4.0.20
