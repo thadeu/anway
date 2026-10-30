@@ -14,6 +14,14 @@ go build -o bin/server ./cmd/server
 DATA_DIR=./data ./bin/server
 ```
 
+## Docker
+
+```bash
+docker run -p 7419:7419 -e SERVER_PASSWORD=change-me -v anway-data:/data ghcr.io/thadeu/anway:latest
+```
+
+See [docs/dev/docker.md](docs/dev/docker.md).
+
 ## Download
 
 Each `v*` tag publishes binaries for Linux and macOS, on x86-64 and arm64, at [Releases](https://github.com/thadeu/anway/releases).
@@ -47,6 +55,7 @@ There is no web UI yet.
 - [docs/dev/storage.md](docs/dev/storage.md): Storage design.
 - [docs/dev/batches.md](docs/dev/batches.md): Batches and job tracking.
 - [docs/dev/configuration.md](docs/dev/configuration.md): Configuration.
+- [docs/dev/docker.md](docs/dev/docker.md): Docker image.
 - [docs/dev/tls.md](docs/dev/tls.md): TLS with Let's Encrypt or Caddy.
 - [docs/dev/clients.md](docs/dev/clients.md): Client repositories and rules.
 - [docs/dev/development.md](docs/dev/development.md): Development rules.
