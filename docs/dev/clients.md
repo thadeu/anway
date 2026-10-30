@@ -31,8 +31,16 @@ The Ruby `Anway::Worker` module is the one exception. It is a job API above the 
 - Clients generate `jid` and `wid`.
 - All clients read the server address from `SERVER_URL`.
 - URLs use `tcp://` or `tcp+tls://`.
-- A client passes the conformance scenarios before a release.
+- A client passes the scenarios in `conformance/scenarios.md` before a release.
 - The `anway-js` client passes on Node and on Bun.
+
+## Worker shutdown
+
+- `quiet` stops fetching. The worker stays alive and continues to beat.
+- `terminate` or a local stop request gives running jobs a shutdown timeout, then cancels them, then gives a short grace time.
+- After the grace time, the worker fails jobs that still run and stops. A late result is ignored.
+- A worker does not cancel a fetch in progress, because the reply can hold a job.
+- After an empty reply that returns at once, the worker waits a short time, because a quiet server replies with no delay.
 
 ## anway-js build
 
