@@ -3,6 +3,9 @@ package main
 import (
 	"context"
 	"crypto/tls"
+	"errors"
+	"flag"
+	"fmt"
 	"log/slog"
 	"net"
 	"os"
@@ -112,9 +115,19 @@ func writeBackup(dir string, jobs *manager.Manager) (string, error) {
 }
 
 func run() error {
-	cfg, err := config.Load()
+	cfg, err := config.Load(os.Args[1:])
+	if errors.Is(err, flag.ErrHelp) {
+		return nil
+	}
+
 	if err != nil {
 		return err
+	}
+
+	if cfg.ShowVersion {
+		fmt.Println(config.ProductName, config.Version)
+
+		return nil
 	}
 
 	log := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: cfg.LogLevel}))

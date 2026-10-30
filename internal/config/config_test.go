@@ -22,3 +22,27 @@ func TestValidate(t *testing.T) {
 		}
 	}
 }
+
+func TestFlagsOverrideEnv(t *testing.T) {
+	t.Setenv("BIND_ADDR", "127.0.0.1:1")
+	t.Setenv("DATA_DIR", "/env")
+
+	cfg, err := Load([]string{"--bind", "127.0.0.1:2"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if cfg.BindAddr != "127.0.0.1:2" || cfg.DataDir != "/env" || cfg.BackupDir != "/env/backups" {
+		t.Fatalf("unexpected config: %+v", cfg)
+	}
+}
+
+func TestFlagsAreValidated(t *testing.T) {
+	if _, err := Load([]string{"--bind", "0.0.0.0:1"}); err == nil {
+		t.Fatal("a public address needs a password")
+	}
+
+	if _, err := Load([]string{"extra"}); err == nil {
+		t.Fatal("an extra argument must fail")
+	}
+}

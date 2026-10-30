@@ -30,6 +30,20 @@ To restore, stop the server and replace `$DATA_DIR/jobs.db` with a snapshot.
 - A snapshot holds a long read transaction, so the data file can grow while it runs.
 - Jobs after the snapshot are not in it.
 
+## Flags
+
+Flags have priority over env vars. The password has no flag, because a process list shows flags.
+
+| Flag | Env var |
+|---|---|
+| `--bind` | `BIND_ADDR` |
+| `--data-dir` | `DATA_DIR` |
+| `--conf-dir` | `CONF_DIR` |
+| `--tls-cert` | `TLS_CERT_FILE` |
+| `--tls-key` | `TLS_KEY_FILE` |
+| `--version` | None |
+| `--help` | None |
+
 ## TOML settings
 
 The server merges all `*.toml` files in `CONF_DIR`. `SIGHUP` reloads them. If a file is invalid, the old settings stay active. At boot, an invalid file stops the server.

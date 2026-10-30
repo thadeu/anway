@@ -14,6 +14,12 @@ go build -o bin/server ./cmd/server
 DATA_DIR=./data ./bin/server
 ```
 
+## Download
+
+Each `v*` tag publishes binaries for Linux and macOS, on x86-64 and arm64, at [Releases](https://github.com/thadeu/anway/releases).
+
+Configure the server with env vars or flags. See [docs/dev/configuration.md](docs/dev/configuration.md).
+
 ## Features
 
 - Queues with priority order, pause, and resume.
