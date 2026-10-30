@@ -10,7 +10,7 @@ import (
 
 	bolt "go.etcd.io/bbolt"
 
-	"jobserver/internal/job"
+	"github.com/thadeu/anway/internal/job"
 )
 
 func TestWriteAfterCloseFails(t *testing.T) {

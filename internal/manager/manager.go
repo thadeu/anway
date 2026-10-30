@@ -7,8 +7,8 @@ import (
 	"sync"
 	"time"
 
-	"jobserver/internal/job"
-	"jobserver/internal/storage"
+	"github.com/thadeu/anway/internal/job"
+	"github.com/thadeu/anway/internal/storage"
 )
 
 const (

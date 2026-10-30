@@ -12,11 +12,11 @@ import (
 	"syscall"
 	"time"
 
-	"jobserver/internal/config"
-	"jobserver/internal/cron"
-	"jobserver/internal/manager"
-	"jobserver/internal/server"
-	"jobserver/internal/storage"
+	"github.com/thadeu/anway/internal/config"
+	"github.com/thadeu/anway/internal/cron"
+	"github.com/thadeu/anway/internal/manager"
+	"github.com/thadeu/anway/internal/server"
+	"github.com/thadeu/anway/internal/storage"
 )
 
 func main() {

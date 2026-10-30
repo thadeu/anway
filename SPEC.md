@@ -54,19 +54,20 @@ These numbers are initial targets, not measurements.
 | 4 | Replication and high availability |
 | 5 | SaaS: tenants, quotas, authentication with clowk, billing with contagorda-pay |
 
+Own clients are separate repositories: `anway-go`, `anway-ruby`, and `anway-js`. See `docs/dev/clients.md`.
+
 ## 5. Out of scope for now
 
 - Exactly-once delivery.
 - Workflow engines and durable function execution.
 - Clustering.
-- Own client libraries.
 - Web UI (deferred).
 - Multi-tenancy. The storage keys and connection context SHOULD NOT block it later.
 
 ## 6. Open decisions
 
-- Final product name.
-- Source license. Do not copy code from Faktory, because Faktory is AGPL. Use only the public protocol.
+- Do not copy code from Faktory, because Faktory is AGPL. Use only the public protocol.
+
 - Tenant model on the wire. One option is one password per tenant.
 - Replication design.
 - Retention limit of the dead set.

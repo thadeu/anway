@@ -5,7 +5,7 @@ import (
 	"errors"
 	"time"
 
-	"jobserver/internal/job"
+	"github.com/thadeu/anway/internal/job"
 )
 
 var (

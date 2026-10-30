@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"jobserver/internal/job"
+	"github.com/thadeu/anway/internal/job"
 )
 
 func BenchmarkDrain(b *testing.B) {

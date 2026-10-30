@@ -10,10 +10,10 @@ import (
 	"testing"
 	"time"
 
-	"jobserver/internal/manager"
-	"jobserver/internal/server"
-	"jobserver/internal/storage"
-	"jobserver/internal/testclient"
+	"github.com/thadeu/anway/internal/manager"
+	"github.com/thadeu/anway/internal/server"
+	"github.com/thadeu/anway/internal/storage"
+	"github.com/thadeu/anway/internal/testclient"
 )
 
 type fixture struct {

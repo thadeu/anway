@@ -1,10 +1,10 @@
-# Job Server
+# Anway
 
-A language-agnostic background job server. It is one binary with embedded disk storage, and it does not need Redis.
+A [Clowk](https://clowk.in) product, planned at `anway.clowk.in`. A language-agnostic background job server. It is one binary with embedded disk storage, and it does not need Redis.
 
 Any language can push a job, and a worker in another language can run it. For example, a Rails app pushes `email.send`, and a Go worker runs it.
 
-> Status: phase 1 core. The project name is temporary.
+> Status: phase 1 core.
 
 ## Run
 
@@ -42,4 +42,9 @@ There is no web UI yet.
 - [docs/dev/batches.md](docs/dev/batches.md): Batches and job tracking.
 - [docs/dev/configuration.md](docs/dev/configuration.md): Configuration.
 - [docs/dev/tls.md](docs/dev/tls.md): TLS with Let's Encrypt or Caddy.
+- [docs/dev/clients.md](docs/dev/clients.md): Client repositories and rules.
 - [docs/dev/development.md](docs/dev/development.md): Development rules.
+
+## License
+
+The server is licensed under [AGPL-3.0](LICENSE). The clients use MIT.

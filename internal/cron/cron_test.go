@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"jobserver/internal/manager"
-	"jobserver/internal/storage"
+	"github.com/thadeu/anway/internal/manager"
+	"github.com/thadeu/anway/internal/storage"
 )
 
 const settingsFile = `

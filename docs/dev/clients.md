@@ -1,0 +1,56 @@
+# Clients
+
+Each client is its own repository. The server repository holds these rules and the shared conformance scenarios.
+
+All repositories are public at `github.com/thadeu`. The project is open source first.
+
+| Repository | Content | Language floor | Package format |
+|---|---|---|---|
+| `anway` | Server | Go 1.27 | One binary |
+| `anway-go` | Go client and worker | Go 1.26 | Go module with no AGPL code |
+| `anway-ruby` | Ruby client and worker, Rails integration | Ruby 3.4, Rails 8 | One gem with an optional Railtie |
+| `anway-js` | Client and worker for Node and Bun | Node 24, Bun 1.2 | TypeScript-first, ESM only |
+
+We support only modern language versions. There is no CommonJS build and no legacy runtime support.
+
+## Contract
+
+The first client, `anway-go`, sets the client contract. All other clients have the same operations, argument order, defaults, and error kinds, with names in the style of each language.
+
+The Ruby `Anway::Worker` module is the one exception. It is a job API above the Ruby client, and the client contract does not include it. It uses the client for all server calls.
+
+## Layers
+
+1. **Connection:** Socket, TLS, handshake, RESP, reconnect, and pool.
+2. **Client:** Push, fetch, ack, fail, batch, track, queue, mutate, and info.
+3. **Worker:** Concurrency, heartbeat, quiet, terminate, job registry, and middleware.
+4. **Framework integration:** Rails only, for now.
+
+## Rules
+
+- Clients generate `jid` and `wid`.
+- All clients read the server address from `SERVER_URL`.
+- URLs use `tcp://` or `tcp+tls://`.
+- A client passes the conformance scenarios before a release.
+- The `anway-js` client passes on Node and on Bun.
+
+## anway-js build
+
+Write the source in TypeScript. Use esbuild for ESM output and `tsc` for type declarations only. Use pnpm and the standard ESLint rules.
+
+## Rails
+
+- The native API is a module with `perform` and `perform_async`.
+- An optional ActiveJob adapter supports existing jobs.
+- The server owns retries. The adapter sends `retry: 0` for jobs that use `retry_on`, so that one failure does not retry twice.
+- Pushes from a request use a connection pool and a timeout.
+
+## Order
+
+1. Conformance scenarios in this repository.
+2. `anway-go`.
+3. `anway-ruby`, without Rails.
+4. Rails integration in `anway-ruby`.
+5. `anway-js`.
+
+Later clients: Rust, Java, Kotlin, and Swift.

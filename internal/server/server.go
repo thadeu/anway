@@ -19,11 +19,11 @@ import (
 	"sync"
 	"time"
 
-	"jobserver/internal/config"
-	"jobserver/internal/job"
-	"jobserver/internal/manager"
-	"jobserver/internal/protocol"
-	"jobserver/internal/storage"
+	"github.com/thadeu/anway/internal/config"
+	"github.com/thadeu/anway/internal/job"
+	"github.com/thadeu/anway/internal/manager"
+	"github.com/thadeu/anway/internal/protocol"
+	"github.com/thadeu/anway/internal/storage"
 )
 
 const (

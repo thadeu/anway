@@ -16,9 +16,9 @@ import (
 	"github.com/BurntSushi/toml"
 	schedule "github.com/robfig/cron/v3"
 
-	"jobserver/internal/job"
-	"jobserver/internal/manager"
-	"jobserver/internal/storage"
+	"github.com/thadeu/anway/internal/job"
+	"github.com/thadeu/anway/internal/manager"
+	"github.com/thadeu/anway/internal/storage"
 )
 
 const defaultThrottleTimeout = 60

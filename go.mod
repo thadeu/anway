@@ -1,4 +1,4 @@
-module jobserver
+module github.com/thadeu/anway
 
 go 1.27
 

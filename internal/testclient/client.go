@@ -12,7 +12,7 @@ import (
 	"strings"
 	"time"
 
-	"jobserver/internal/protocol"
+	"github.com/thadeu/anway/internal/protocol"
 )
 
 const handshakeTimeout = 10 * time.Second

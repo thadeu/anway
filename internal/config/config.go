@@ -12,7 +12,7 @@ import (
 )
 
 const (
-	ProductName = "jobserver"
+	ProductName = "anway"
 	Version     = "0.1.0"
 )
 

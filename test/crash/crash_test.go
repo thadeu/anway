@@ -14,9 +14,9 @@ import (
 	"testing"
 	"time"
 
-	"jobserver/internal/job"
-	"jobserver/internal/storage"
-	"jobserver/internal/testclient"
+	"github.com/thadeu/anway/internal/job"
+	"github.com/thadeu/anway/internal/storage"
+	"github.com/thadeu/anway/internal/testclient"
 )
 
 func startServer(t *testing.T, binary, dir, addr string) *exec.Cmd {
@@ -67,7 +67,7 @@ func freeAddr(t *testing.T) string {
 func TestConfirmedChangesSurviveKill(t *testing.T) {
 	binary := filepath.Join(t.TempDir(), "server")
 
-	build := exec.Command("go", "build", "-o", binary, "jobserver/cmd/server")
+	build := exec.Command("go", "build", "-o", binary, "github.com/thadeu/anway/cmd/server")
 	if output, err := build.CombinedOutput(); err != nil {
 		t.Fatalf("build failed: %s", output)
 	}
@@ -217,7 +217,7 @@ func releaseReservations(t *testing.T, dir string) {
 func TestBackupRestores(t *testing.T) {
 	binary := filepath.Join(t.TempDir(), "server")
 
-	build := exec.Command("go", "build", "-o", binary, "jobserver/cmd/server")
+	build := exec.Command("go", "build", "-o", binary, "github.com/thadeu/anway/cmd/server")
 	if output, err := build.CombinedOutput(); err != nil {
 		t.Fatalf("build failed: %s", output)
 	}
@@ -288,7 +288,7 @@ func TestBackupRestores(t *testing.T) {
 func TestShutdownUnderLoadIsClean(t *testing.T) {
 	binary := filepath.Join(t.TempDir(), "server")
 
-	build := exec.Command("go", "build", "-o", binary, "jobserver/cmd/server")
+	build := exec.Command("go", "build", "-o", binary, "github.com/thadeu/anway/cmd/server")
 	if output, err := build.CombinedOutput(); err != nil {
 		t.Fatalf("build failed: %s", output)
 	}
@@ -359,7 +359,7 @@ func drain(t *testing.T, addr string) map[string]bool {
 func TestBatchSurvivesKill(t *testing.T) {
 	binary := filepath.Join(t.TempDir(), "server")
 
-	build := exec.Command("go", "build", "-o", binary, "jobserver/cmd/server")
+	build := exec.Command("go", "build", "-o", binary, "github.com/thadeu/anway/cmd/server")
 	if output, err := build.CombinedOutput(); err != nil {
 		t.Fatalf("build failed: %s", output)
 	}

@@ -10,7 +10,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"jobserver/internal/testclient"
+	"github.com/thadeu/anway/internal/testclient"
 )
 
 func main() {
