@@ -50,7 +50,7 @@ Write the source in TypeScript. Use esbuild for ESM output and `tsc` for type de
 
 - The native API is a module with `perform` and `perform_async`.
 - An optional ActiveJob adapter supports existing jobs.
-- The server owns retries. The adapter sends `retry: 0` for jobs that use `retry_on`, so that one failure does not retry twice.
+- The server owns retries. The adapter sends `retry: -1` for jobs that use `retry_on`, so that one failure does not retry twice and the final error goes to the dead set.
 - Pushes from a request use a connection pool and a timeout.
 
 ## Order
