@@ -36,7 +36,7 @@ The protocol follows the [public Faktory work protocol](https://github.com/contr
 | `BATCH STATUS` | `bid` | Status JSON |
 | `TRACK GET` | `jid` | Track JSON |
 | `TRACK SET` | `{"jid","percent","desc","reserve_until"}` | `OK` |
-| `FLUSH` | None | `OK`. It deletes all data. |
+| `FLUSH` | None | `OK`. It deletes all data. Disabled unless `ALLOW_FLUSH=true`. |
 | `END` | None | `OK`, then the connection closes |
 
 ## Job payload

@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -209,6 +210,108 @@ func releaseReservations(t *testing.T, dir string) {
 
 	if _, err := store.MoveDue(future, 1<<30); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// TestBackupRestores restores a snapshot that a running server wrote.
+func TestBackupRestores(t *testing.T) {
+	binary := filepath.Join(t.TempDir(), "server")
+
+	build := exec.Command("go", "build", "-o", binary, "jobserver/cmd/server")
+	if output, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("build failed: %s", output)
+	}
+
+	dir := t.TempDir()
+	addr := freeAddr(t)
+	server := startServer(t, binary, dir, addr)
+
+	client, err := testclient.Dial(addr, "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	payload := map[string]any{"jid": "saved", "jobtype": "x", "args": []any{}}
+
+	if _, err := client.Command("PUSH", payload); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := server.Process.Signal(syscall.SIGUSR1); err != nil {
+		t.Fatal(err)
+	}
+
+	var backups []string
+
+	for range 100 {
+		backups, _ = filepath.Glob(filepath.Join(dir, "backups", "*.db"))
+		if len(backups) == 1 {
+			break
+		}
+
+		time.Sleep(50 * time.Millisecond)
+	}
+
+	if len(backups) != 1 {
+		t.Fatalf("unexpected backups: %v", backups)
+	}
+
+	late := map[string]any{"jid": "late", "jobtype": "x", "args": []any{}}
+
+	if _, err := client.Command("PUSH", late); err != nil {
+		t.Fatal(err)
+	}
+
+	client.Close()
+	server.Process.Kill()
+	server.Wait()
+
+	restored := t.TempDir()
+
+	raw, err := os.ReadFile(backups[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := os.WriteFile(filepath.Join(restored, "jobs.db"), raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	startServer(t, binary, restored, addr)
+
+	if survivors := drain(t, addr); len(survivors) != 1 || !survivors["saved"] {
+		t.Fatalf("unexpected jobs: %v", survivors)
+	}
+}
+
+// TestShutdownUnderLoadIsClean checks that SIGTERM ends with exit code 0.
+func TestShutdownUnderLoadIsClean(t *testing.T) {
+	binary := filepath.Join(t.TempDir(), "server")
+
+	build := exec.Command("go", "build", "-o", binary, "jobserver/cmd/server")
+	if output, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("build failed: %s", output)
+	}
+
+	conf := t.TempDir()
+	settings := "[[cron]]\n  schedule = \"* * * * *\"\n  [cron.job]\n    type = \"x\"\n"
+
+	if err := os.WriteFile(filepath.Join(conf, "c.toml"), []byte(settings), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Setenv("CONF_DIR", conf)
+	t.Setenv("SHUTDOWN_TIMEOUT", "200ms")
+
+	addr := freeAddr(t)
+	server := startServer(t, binary, t.TempDir(), addr)
+
+	if err := server.Process.Signal(syscall.SIGTERM); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := server.Wait(); err != nil {
+		t.Fatalf("unclean shutdown: %v", err)
 	}
 }
 

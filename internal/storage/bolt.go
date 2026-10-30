@@ -6,9 +6,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -21,6 +23,7 @@ const (
 	initialMmapSize = 1 << 30
 	maxGroupSize    = 1000
 	mutationPage    = 500
+	schemaVersion   = 1
 	queuePrefix     = "queue/"
 )
 
@@ -35,6 +38,8 @@ var (
 	counterAcks     = []byte("total/processed")
 	counterFailures = []byte("total/failures")
 	counterExpired  = []byte("total/expired")
+	bucketMeta      = []byte("meta")
+	keySchema       = []byte("schema_version")
 	bucketPaused    = []byte("paused")
 	bucketUniques   = []byte("uniques")
 	bucketUniqueTTL = []byte("unique_expiry")
@@ -65,6 +70,9 @@ type Bolt struct {
 	writes  chan writeOp
 	stopped chan struct{}
 
+	closeMu sync.RWMutex
+	closed  bool
+
 	throttles atomic.Pointer[map[string]Throttle]
 }
 
@@ -82,10 +90,10 @@ func OpenBolt(dir string) (*Bolt, error) {
 		return nil, fmt.Errorf("open database: %w", err)
 	}
 
-	if err := db.Update(createBuckets); err != nil {
+	if err := db.Update(prepareSchema); err != nil {
 		db.Close()
 
-		return nil, fmt.Errorf("create buckets: %w", err)
+		return nil, err
 	}
 
 	store := &Bolt{db: db, writes: make(chan writeOp, maxGroupSize), stopped: make(chan struct{})}
@@ -155,9 +163,43 @@ func isExpected(err error) bool {
 
 func (b *Bolt) write(apply func(tx *bolt.Tx) error) error {
 	done := make(chan error, 1)
+
+	b.closeMu.RLock()
+
+	if b.closed {
+		b.closeMu.RUnlock()
+
+		return ErrClosed
+	}
+
 	b.writes <- writeOp{apply: apply, done: done}
+	b.closeMu.RUnlock()
 
 	return <-done
+}
+
+// prepareSchema refuses data from a newer version. Migrations run here.
+func prepareSchema(tx *bolt.Tx) error {
+	meta, err := tx.CreateBucketIfNotExists(bucketMeta)
+	if err != nil {
+		return err
+	}
+
+	stored := uint64(0)
+
+	if raw := meta.Get(keySchema); raw != nil {
+		stored = binary.BigEndian.Uint64(raw)
+	}
+
+	if stored > schemaVersion {
+		return fmt.Errorf("data schema %d is newer than the supported schema %d", stored, schemaVersion)
+	}
+
+	if err := meta.Put(keySchema, binary.BigEndian.AppendUint64(nil, schemaVersion)); err != nil {
+		return err
+	}
+
+	return createBuckets(tx)
 }
 
 func createBuckets(tx *bolt.Tx) error {
@@ -171,10 +213,53 @@ func createBuckets(tx *bolt.Tx) error {
 }
 
 func (b *Bolt) Close() error {
+	b.closeMu.Lock()
+
+	if b.closed {
+		b.closeMu.Unlock()
+
+		return nil
+	}
+
+	b.closed = true
 	close(b.writes)
+	b.closeMu.Unlock()
+
 	<-b.stopped
 
 	return b.db.Close()
+}
+
+// Snapshot writes a consistent copy. The file appears only when it is complete.
+func (b *Bolt) Snapshot(path string) error {
+	temporary := path + ".tmp"
+
+	file, err := os.OpenFile(temporary, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+	if err != nil {
+		return err
+	}
+
+	defer os.Remove(temporary)
+	defer file.Close()
+
+	err = b.db.View(func(tx *bolt.Tx) error {
+		_, err := tx.WriteTo(file)
+
+		return err
+	})
+	if err != nil {
+		return err
+	}
+
+	if err := file.Sync(); err != nil {
+		return err
+	}
+
+	if err := file.Close(); err != nil {
+		return err
+	}
+
+	return os.Rename(temporary, path)
 }
 
 func (b *Bolt) Push(j *job.Job, now time.Time) error {

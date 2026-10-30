@@ -2,6 +2,8 @@
 package main
 
 import (
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -15,6 +17,12 @@ import (
 
 func main() {
 	mode, jid := os.Args[1], os.Args[2]
+
+	if mode == "tls" {
+		tlsFlow()
+
+		return
+	}
 
 	if mode != "push" {
 		faktory.RandomProcessWid = "compat-go"
@@ -214,4 +222,33 @@ func batchFlow(client *faktory.Client) {
 	}
 
 	fmt.Println("go batch flow passed")
+}
+
+func tlsFlow() {
+	authority, err := os.ReadFile(os.Getenv("TLS_CA"))
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	roots := x509.NewCertPool()
+	roots.AppendCertsFromPEM(authority)
+
+	server := &faktory.Server{
+		Network: "tcp+tls",
+		Address: os.Getenv("TLS_ADDR"),
+		Timeout: 5 * time.Second,
+		TLS:     &tls.Config{RootCAs: roots, ServerName: "localhost"},
+	}
+
+	client, err := faktory.Dial(server, os.Getenv("TLS_PASSWORD"))
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer client.Close()
+
+	if err := client.Push(faktory.NewJob("compat-tls")); err != nil {
+		log.Fatal(err)
+	}
+
+	fmt.Println("go tls flow passed")
 }

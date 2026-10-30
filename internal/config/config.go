@@ -2,9 +2,12 @@
 package config
 
 import (
+	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"os"
+	"path/filepath"
 	"time"
 )
 
@@ -18,16 +21,23 @@ type Config struct {
 	DataDir         string
 	ConfDir         string
 	Password        string
+	AllowFlush      bool
+	TLSCertFile     string
+	TLSKeyFile      string
+	BackupDir       string
 	ShutdownTimeout time.Duration
 	LogLevel        slog.Level
 }
 
 func Load() (Config, error) {
 	cfg := Config{
-		BindAddr:        env("BIND_ADDR", "0.0.0.0:7419"),
+		BindAddr:        env("BIND_ADDR", "127.0.0.1:7419"),
 		DataDir:         env("DATA_DIR", "./data"),
 		ConfDir:         env("CONF_DIR", "./conf.d"),
 		Password:        os.Getenv("SERVER_PASSWORD"),
+		AllowFlush:      os.Getenv("ALLOW_FLUSH") == "true",
+		TLSCertFile:     os.Getenv("TLS_CERT_FILE"),
+		TLSKeyFile:      os.Getenv("TLS_KEY_FILE"),
 		ShutdownTimeout: 30 * time.Second,
 	}
 
@@ -44,7 +54,36 @@ func Load() (Config, error) {
 		return Config{}, fmt.Errorf("invalid LOG_LEVEL: %w", err)
 	}
 
-	return cfg, nil
+	cfg.BackupDir = env("BACKUP_DIR", filepath.Join(cfg.DataDir, "backups"))
+
+	return cfg, cfg.validate()
+}
+
+func (c Config) validate() error {
+	if (c.TLSCertFile == "") != (c.TLSKeyFile == "") {
+		return errors.New("TLS_CERT_FILE and TLS_KEY_FILE must be set together")
+	}
+
+	if c.Password == "" && !isLoopback(c.BindAddr) {
+		return fmt.Errorf("SERVER_PASSWORD is required when BIND_ADDR is %s", c.BindAddr)
+	}
+
+	return nil
+}
+
+func isLoopback(addr string) bool {
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		return false
+	}
+
+	if host == "localhost" {
+		return true
+	}
+
+	ip := net.ParseIP(host)
+
+	return ip != nil && ip.IsLoopback()
 }
 
 func env(key, fallback string) string {

@@ -2,11 +2,15 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
 	"log/slog"
 	"net"
 	"os"
 	"os/signal"
+	"path/filepath"
+	"sync"
 	"syscall"
+	"time"
 
 	"jobserver/internal/config"
 	"jobserver/internal/cron"
@@ -55,6 +59,58 @@ func reloadOnHangup(ctx context.Context, dir string, jobs *manager.Manager, sche
 	}
 }
 
+func listen(cfg config.Config) (net.Listener, error) {
+	listener, err := net.Listen("tcp", cfg.BindAddr)
+	if err != nil || cfg.TLSCertFile == "" {
+		return listener, err
+	}
+
+	certificate, err := tls.LoadX509KeyPair(cfg.TLSCertFile, cfg.TLSKeyFile)
+	if err != nil {
+		listener.Close()
+
+		return nil, err
+	}
+
+	return tls.NewListener(listener, &tls.Config{
+		Certificates: []tls.Certificate{certificate},
+		MinVersion:   tls.VersionTLS12,
+	}), nil
+}
+
+// backupOnSignal writes a snapshot at each SIGUSR1.
+func backupOnSignal(ctx context.Context, dir string, jobs *manager.Manager, log *slog.Logger) {
+	request := make(chan os.Signal, 1)
+	signal.Notify(request, syscall.SIGUSR1)
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-request:
+			path, err := writeBackup(dir, jobs)
+			if err != nil {
+				log.Error("backup failed", "error", err)
+
+				continue
+			}
+
+			log.Info("backup finished", "path", path)
+		}
+	}
+}
+
+func writeBackup(dir string, jobs *manager.Manager) (string, error) {
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return "", err
+	}
+
+	name := "jobs-" + time.Now().UTC().Format("20060102T150405.000000000") + ".db"
+	path := filepath.Join(dir, name)
+
+	return path, jobs.Snapshot(path)
+}
+
 func run() error {
 	cfg, err := config.Load()
 	if err != nil {
@@ -76,16 +132,21 @@ func run() error {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	listener, err := net.Listen("tcp", cfg.BindAddr)
+	listener, err := listen(cfg)
 	if err != nil {
 		return err
 	}
 
 	jobs := manager.New(store)
-	srv := server.New(jobs, cfg.Password, log)
+	srv := server.New(jobs, server.Options{Password: cfg.Password, AllowFlush: cfg.AllowFlush}, log)
 	loopCtx, stopLoop := context.WithCancel(context.Background())
 
-	defer stopLoop()
+	var loops sync.WaitGroup
+
+	defer func() {
+		stopLoop()
+		loops.Wait()
+	}()
 
 	scheduler := cron.New(jobs, log)
 
@@ -93,11 +154,14 @@ func run() error {
 		return err
 	}
 
-	go scheduler.Run(loopCtx)
-	go reloadOnHangup(loopCtx, cfg.ConfDir, jobs, scheduler, log)
+	loops.Go(func() { scheduler.Run(loopCtx) })
+	loops.Go(func() { reloadOnHangup(loopCtx, cfg.ConfDir, jobs, scheduler, log) })
+	loops.Go(func() { backupOnSignal(loopCtx, cfg.BackupDir, jobs, log) })
 
-	go jobs.Run(loopCtx, func(err error) {
-		log.Error("background loop failed", "error", err)
+	loops.Go(func() {
+		jobs.Run(loopCtx, func(err error) {
+			log.Error("background loop failed", "error", err)
+		})
 	})
 
 	serveErr := make(chan error, 1)

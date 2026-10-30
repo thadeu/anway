@@ -38,7 +38,7 @@ func start(t *testing.T, dir, password string) *fixture {
 	}
 
 	jobs := manager.New(store)
-	srv := server.New(jobs, password, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	srv := server.New(jobs, server.Options{Password: password}, slog.New(slog.NewTextHandler(io.Discard, nil)))
 
 	go srv.Serve(context.Background(), listener)
 
@@ -965,5 +965,20 @@ func TestTrackFailedAndDead(t *testing.T) {
 
 	if track := trackOf(t, worker, "b"); track.State != "dead" {
 		t.Fatalf("unexpected track: %+v", track)
+	}
+}
+
+func TestFlushIsDisabledByDefault(t *testing.T) {
+	f := start(t, t.TempDir(), "")
+	client := dial(t, f, "")
+
+	push(t, client, map[string]any{"jid": "a"})
+
+	if _, err := client.Command("FLUSH", nil); err == nil {
+		t.Fatal("FLUSH must fail")
+	}
+
+	if current := stats(t, f); current.Queues["default"] != 1 {
+		t.Fatalf("unexpected stats: %+v", current)
 	}
 }

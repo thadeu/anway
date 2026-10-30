@@ -74,5 +74,19 @@ for client in "${clients[@]}"; do
   cat "$work/beat-$client"
 done
 
-wait "$server"
+wait "$server" || true
+
+openssl req -x509 -newkey rsa:2048 -nodes -days 1 -subj /CN=localhost \
+  -addext subjectAltName=DNS:localhost \
+  -keyout "$work/key.pem" -out "$work/cert.pem" 2>/dev/null
+
+tls_addr="127.0.0.1:17422"
+
+BIND_ADDR="$tls_addr" DATA_DIR="$work/tls" SERVER_PASSWORD="$password" \
+  TLS_CERT_FILE="$work/cert.pem" TLS_KEY_FILE="$work/key.pem" "$root/bin/server" 2>"$work/tls-log" &
+server=$!
+sleep 1
+
+TLS_CA="$work/cert.pem" TLS_ADDR="$tls_addr" TLS_PASSWORD="$password" go_client tls 0
+
 echo "compat passed"

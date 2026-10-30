@@ -12,6 +12,7 @@ var (
 	ErrDuplicateJob = errors.New("job id already exists")
 	ErrNotReserved  = errors.New("job is not reserved")
 	ErrNotUnique    = errors.New("job not unique")
+	ErrClosed       = errors.New("storage is closed")
 )
 
 // RejectedError is a client error. It does not roll back a commit group.
@@ -120,6 +121,7 @@ type Store interface {
 	ResumeQueues(names []string) error
 	RemoveQueues(names []string) error
 	SetThrottles(throttles map[string]Throttle)
+	Snapshot(path string) error
 	Stats() (Stats, error)
 	Flush() error
 	Close() error

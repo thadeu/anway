@@ -289,6 +289,10 @@ func (m *Manager) WorkerCount() int {
 	return len(m.workers)
 }
 
+func (m *Manager) Snapshot(path string) error {
+	return m.store.Snapshot(path)
+}
+
 func (m *Manager) Stats() (storage.Stats, error) {
 	return m.store.Stats()
 }

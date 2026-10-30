@@ -66,6 +66,10 @@ The OS page cache holds the mapped file. This memory can be reclaimed, but it ap
 
 The file does not shrink when jobs complete. Free pages are reused. Offline compaction recovers disk space after a large backlog.
 
+## Schema version
+
+`meta/schema_version` holds the data format. The server refuses a file from a newer version. Add migrations in `prepareSchema`, and increase `schemaVersion` when the format changes.
+
 ## Recovery at boot
 
 1. Open the file. bbolt uses the last valid meta page, so no log replay is necessary.

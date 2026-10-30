@@ -33,24 +33,32 @@ const (
 	writeTimeout     = 30 * time.Second
 )
 
+// Options holds the settings that change what clients can do.
+type Options struct {
+	Password   string
+	AllowFlush bool
+}
+
 type Server struct {
-	manager  *manager.Manager
-	password string
-	log      *slog.Logger
-	started  time.Time
+	manager    *manager.Manager
+	password   string
+	allowFlush bool
+	log        *slog.Logger
+	started    time.Time
 
 	mu    sync.Mutex
 	conns map[net.Conn]struct{}
 	wg    sync.WaitGroup
 }
 
-func New(m *manager.Manager, password string, log *slog.Logger) *Server {
+func New(m *manager.Manager, options Options, log *slog.Logger) *Server {
 	return &Server{
-		manager:  m,
-		password: password,
-		log:      log,
-		started:  time.Now(),
-		conns:    map[net.Conn]struct{}{},
+		manager:    m,
+		password:   options.Password,
+		allowFlush: options.AllowFlush,
+		log:        log,
+		started:    time.Now(),
+		conns:      map[net.Conn]struct{}{},
 	}
 }
 
@@ -614,6 +622,10 @@ func (s *Server) info(conn net.Conn) error {
 }
 
 func (s *Server) flush(conn net.Conn) error {
+	if !s.allowFlush {
+		return errors.New("FLUSH is disabled, set ALLOW_FLUSH=true to enable it")
+	}
+
 	if err := s.manager.Flush(); err != nil {
 		return err
 	}
