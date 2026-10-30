@@ -17,7 +17,7 @@ Env vars do not have a product prefix, so a rename does not change deployments.
 
 The server does not start with a public address and no password.
 
-Use TLS when clients connect over a shared network. A password does not encrypt job data.
+Use TLS when clients connect over a shared network. A password does not encrypt job data. See [tls.md](tls.md).
 
 ## Backup
 

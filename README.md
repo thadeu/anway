@@ -41,4 +41,5 @@ There is no web UI yet.
 - [docs/dev/storage.md](docs/dev/storage.md): Storage design.
 - [docs/dev/batches.md](docs/dev/batches.md): Batches and job tracking.
 - [docs/dev/configuration.md](docs/dev/configuration.md): Configuration.
+- [docs/dev/tls.md](docs/dev/tls.md): TLS with Let's Encrypt or Caddy.
 - [docs/dev/development.md](docs/dev/development.md): Development rules.
