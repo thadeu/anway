@@ -7,11 +7,11 @@ All repositories are public at `github.com/thadeu`. The project is open source f
 | Repository | Content | Language floor | Package format |
 |---|---|---|---|
 | `anway` | Server | Go 1.27 | One binary |
-| `anway-go` | Go client and worker | Go 1.26 | Go module with no AGPL code |
-| `anway-ruby` | Ruby client and worker, Rails integration | Ruby 3.4, Rails 8 | One gem with an optional Railtie |
-| `anway-js` | Client and worker for Node and Bun | Node 24, Bun 1.2 | TypeScript-first, ESM only |
+| `anway-go` | Go client and worker | Go 1.26 | Module `github.com/thadeu/anway-go`, with no AGPL code |
+| `anway-ruby` | Ruby client and worker, Rails integration | Ruby 3.4, Rails 8.1 | Gem `anway`, with an optional Railtie |
+| `anway-js` | Client and worker for Node and Bun | Node 24, Bun 1.2 | Package `@anway/client` in a pnpm workspace, TypeScript first, ESM and CommonJS |
 
-We support only modern language versions. There is no CommonJS build and no legacy runtime support.
+We support only modern language versions. There is no legacy runtime support.
 
 ## Contract
 
@@ -44,7 +44,7 @@ The Ruby `Anway::Worker` module is the one exception. It is a job API above the 
 
 ## anway-js build
 
-Write the source in TypeScript. Use esbuild for ESM output and `tsc` for type declarations only. Use pnpm and the standard ESLint rules.
+Write the source in TypeScript. Use tsup, which uses esbuild, for ESM, CommonJS, and type declarations. Use pnpm and the standard ESLint rules. The public API is `Anway.Client`, `Anway.Worker`, and `Anway.Job`, from the default export.
 
 ## Rails
 
