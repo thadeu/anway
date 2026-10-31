@@ -44,7 +44,7 @@ internal/protocol/ RESP and command parsing
 internal/server/   TCP connections
 internal/manager/  Job state changes
 internal/storage/  Storage interface and bbolt implementation
-internal/cron/     TOML settings and periodic jobs
+internal/cron/     YAML settings and periodic jobs
 internal/config/   Configuration, and the only location of the product name
 internal/testclient/ Minimal client for tests and load tools
 cmd/loadtest/      Load tool

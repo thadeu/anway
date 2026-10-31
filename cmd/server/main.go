@@ -29,7 +29,7 @@ func main() {
 	}
 }
 
-// applySettings loads all TOML files. It changes nothing when a file is invalid.
+// applySettings loads all YAML files. It changes nothing when a file is invalid.
 func applySettings(dir string, jobs *manager.Manager, scheduler *cron.Scheduler) error {
 	settings, err := cron.LoadSettings(dir)
 	if err != nil {

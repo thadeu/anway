@@ -14,7 +14,7 @@ docker run -d --name anway \
 - `SERVER_PASSWORD` is required, because the image binds to `0.0.0.0`.
 - Keep `/data` on a volume. Without it, a new container has no jobs.
 - The process runs as UID 65532. A bind mount on `/data` must allow this user to write.
-- Mount TOML settings at `/etc/anway/conf.d`.
+- Mount YAML settings at `/etc/anway/conf.d`.
 - `docker kill -s USR1 anway` writes a backup, and `docker kill -s HUP anway` reloads settings.
 - Set the stop timeout above `SHUTDOWN_TIMEOUT`, which is 30 seconds. In Kubernetes, use `terminationGracePeriodSeconds`.
 - Run one replica only. Two servers cannot share one data file.

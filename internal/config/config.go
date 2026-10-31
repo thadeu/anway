@@ -61,7 +61,7 @@ func Load(args []string) (Config, error) {
 
 	flags.StringVar(&cfg.BindAddr, "bind", cfg.BindAddr, "work protocol address")
 	flags.StringVar(&cfg.DataDir, "data-dir", cfg.DataDir, "storage directory")
-	flags.StringVar(&cfg.ConfDir, "conf-dir", cfg.ConfDir, "TOML settings directory")
+	flags.StringVar(&cfg.ConfDir, "conf-dir", cfg.ConfDir, "YAML settings directory")
 	flags.StringVar(&cfg.TLSCertFile, "tls-cert", cfg.TLSCertFile, "TLS certificate file")
 	flags.StringVar(&cfg.TLSKeyFile, "tls-key", cfg.TLSKeyFile, "TLS private key file")
 	flags.BoolVar(&cfg.ShowVersion, "version", false, "print the version")

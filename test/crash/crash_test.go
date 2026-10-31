@@ -294,9 +294,9 @@ func TestShutdownUnderLoadIsClean(t *testing.T) {
 	}
 
 	conf := t.TempDir()
-	settings := "[[cron]]\n  schedule = \"* * * * *\"\n  [cron.job]\n    type = \"x\"\n"
+	settings := "cron:\n  - schedule: \"* * * * *\"\n    job:\n      type: x\n"
 
-	if err := os.WriteFile(filepath.Join(conf, "c.toml"), []byte(settings), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(conf, "c.yml"), []byte(settings), 0o600); err != nil {
 		t.Fatal(err)
 	}
 

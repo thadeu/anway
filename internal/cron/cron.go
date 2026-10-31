@@ -1,4 +1,4 @@
-// Package cron loads TOML settings and pushes periodic jobs.
+// Package cron loads YAML settings and pushes periodic jobs.
 package cron
 
 import (
@@ -6,15 +6,18 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
+	"sort"
 	"sync"
 	"time"
 
-	"github.com/BurntSushi/toml"
 	schedule "github.com/robfig/cron/v3"
+	"go.yaml.in/yaml/v3"
 
 	"github.com/thadeu/anway/internal/job"
 	"github.com/thadeu/anway/internal/manager"
@@ -24,50 +27,44 @@ import (
 const defaultThrottleTimeout = 60
 
 type JobTemplate struct {
-	Type       string         `toml:"type"`
-	Queue      string         `toml:"queue"`
-	Args       []any          `toml:"args"`
-	Retry      *int           `toml:"retry"`
-	ReserveFor int            `toml:"reserve_for"`
-	Custom     map[string]any `toml:"custom"`
+	Type       string         `yaml:"type"`
+	Queue      string         `yaml:"queue"`
+	Args       []any          `yaml:"args"`
+	Retry      *int           `yaml:"retry"`
+	ReserveFor int            `yaml:"reserve_for"`
+	Custom     map[string]any `yaml:"custom"`
 }
 
 type Entry struct {
-	Schedule string      `toml:"schedule"`
-	Job      JobTemplate `toml:"job"`
+	Schedule string      `yaml:"schedule"`
+	Job      JobTemplate `yaml:"job"`
 
 	parsed schedule.Schedule
 }
 
 type ThrottleSetting struct {
-	Concurrency int `toml:"concurrency"`
-	Worker      int `toml:"worker"`
-	Timeout     int `toml:"timeout"`
+	Concurrency int `yaml:"concurrency"`
+	Worker      int `yaml:"worker"`
+	Timeout     int `yaml:"timeout"`
 }
 
 type Settings struct {
-	Entries       []Entry                    `toml:"cron"`
-	ThrottleTable map[string]ThrottleSetting `toml:"throttles"`
+	Entries       []Entry                    `yaml:"cron"`
+	ThrottleTable map[string]ThrottleSetting `yaml:"throttles"`
 }
 
-// LoadSettings merges all TOML files of a directory. A missing directory is empty.
+// LoadSettings merges all YAML files of a directory. A missing directory is empty.
 func LoadSettings(dir string) (Settings, error) {
 	merged := Settings{ThrottleTable: map[string]ThrottleSetting{}}
 
-	files, err := filepath.Glob(filepath.Join(dir, "*.toml"))
+	files, err := settingFiles(dir)
 	if err != nil {
 		return merged, err
 	}
 
 	for _, file := range files {
-		raw, err := os.ReadFile(file)
+		current, err := readSettings(file)
 		if err != nil {
-			return merged, err
-		}
-
-		var current Settings
-
-		if err := toml.Unmarshal(raw, &current); err != nil {
 			return merged, fmt.Errorf("%s: %w", file, err)
 		}
 
@@ -100,6 +97,43 @@ func LoadSettings(dir string) (Settings, error) {
 	}
 
 	return merged, nil
+}
+
+func settingFiles(dir string) ([]string, error) {
+	var files []string
+
+	for _, pattern := range []string{"*.yml", "*.yaml"} {
+		matches, err := filepath.Glob(filepath.Join(dir, pattern))
+		if err != nil {
+			return nil, err
+		}
+
+		files = append(files, matches...)
+	}
+
+	sort.Strings(files)
+
+	return files, nil
+}
+
+// readSettings rejects unknown fields, so that a typing error stops the load.
+func readSettings(path string) (Settings, error) {
+	var current Settings
+
+	file, err := os.Open(path)
+	if err != nil {
+		return current, err
+	}
+	defer file.Close()
+
+	decoder := yaml.NewDecoder(file)
+	decoder.KnownFields(true)
+
+	if err := decoder.Decode(&current); err != nil && !errors.Is(err, io.EOF) {
+		return current, err
+	}
+
+	return current, nil
 }
 
 func (s Settings) Throttles() map[string]storage.Throttle {
