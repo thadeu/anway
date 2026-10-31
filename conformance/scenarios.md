@@ -4,7 +4,7 @@ Each client must pass these scenarios against a real server. A client maps each 
 
 | ID | Scenario |
 |---|---|
-| C01 | Connect with a `tcp://` URL, and read `SERVER_URL` when the URL is blank. |
+| C01 | Connect with a `tcp://` URL, and read `ANWAY_URL` when the URL is blank. |
 | C02 | Connect with a password. A wrong password returns an error. |
 | C03 | Connect with `tcp+tls://`. |
 | C04 | Push, fetch, and ack one job. Args keep their values. |

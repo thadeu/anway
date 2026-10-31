@@ -29,7 +29,7 @@ The Ruby `Anway::Worker` module is the one exception. It is a job API above the 
 ## Rules
 
 - Clients generate `jid` and `wid`.
-- All clients read the server address from `SERVER_URL`.
+- All clients read the server address from `ANWAY_URL`. A client runs inside an app, so this name has the product prefix to prevent a collision with an app variable.
 - URLs use `tcp://` or `tcp+tls://`.
 - A client passes the scenarios in `conformance/scenarios.md` before a release.
 - The `anway-js` client passes on Node and on Bun.

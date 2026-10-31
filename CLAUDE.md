@@ -4,7 +4,8 @@ Language-agnostic background job server in Go, with embedded disk storage. Read 
 
 ## Rules
 
-- **Name:** The product is Anway, by Clowk. Env vars have no product prefix, and the name stays in one config location in the server code.
+- **Name:** The product is Anway, by Clowk. Server env vars have no product prefix, because the server runs alone. The name stays in one config location in the server code.
+- **Client env:** Clients read `ANWAY_URL`. They run inside apps, and a generic name can collide with an app variable.
 - **Protocol:** Stay compatible with the public Faktory work protocol. Add new features only as new commands or optional fields.
 - **Legal:** Do not copy or read for reuse any Faktory source code. Use only the public protocol specification and observed behavior.
 - **Durability:** Reply `OK` only after a synced write. Each state change is one atomic storage batch.
