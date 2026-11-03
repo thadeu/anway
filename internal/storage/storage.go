@@ -134,6 +134,9 @@ type Store interface {
 	SaveMetrics(minutes []MetricMinute) error
 	LoadMetrics(first, last int64) ([]MetricMinute, error)
 	PruneMetrics(before int64, limit int) (int, error)
+	SaveWorkerSetting(name string, setting WorkerSetting) error
+	LoadWorkerSetting(name string) (WorkerSetting, bool, error)
+	DeleteWorkerSetting(name string) error
 	Flush() error
 	Close() error
 }

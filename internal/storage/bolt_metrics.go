@@ -12,11 +12,14 @@ import (
 var bucketMetrics = []byte("metrics")
 
 // MetricMinute holds the counts of one minute. Minute is Unix seconds / 60.
+// Threads is the peak of worker threads in the minute. Minutes saved before
+// it existed read as 0.
 type MetricMinute struct {
-	Minute int64             `json:"-"`
-	Done   uint64            `json:"d"`
-	Failed uint64            `json:"f"`
-	Queues map[string]uint64 `json:"q,omitempty"`
+	Minute  int64             `json:"-"`
+	Done    uint64            `json:"d"`
+	Failed  uint64            `json:"f"`
+	Threads uint64            `json:"t,omitempty"`
+	Queues  map[string]uint64 `json:"q,omitempty"`
 }
 
 func minuteKey(minute int64) []byte {

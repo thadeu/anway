@@ -25,8 +25,10 @@ Each client must pass these scenarios against a real server. A client maps each 
 | W03 | A handler panic or exception fails the job, and the worker continues. |
 | W04 | An unknown job type fails the job. |
 | W05 | Middleware wraps each job in order. |
-| W06 | The worker stops at server `terminate` and fails unfinished jobs. The failure is on the server after a restart. |
+| W06 | The worker stops at `terminate` in a `BEAT` reply and fails unfinished jobs with a `FAIL`. A scripted server sends `terminate`, because a real server sends it only for an operator. |
 | W07 | The worker stops at a local stop request and lets running jobs finish. |
 | W08 | Server `quiet` stops fetch, and the worker stays alive until `terminate`. |
 | W09 | The shutdown timeout cancels the context of running jobs, and those jobs fail. |
 | W10 | A handler that ignores cancellation cannot block the shutdown. Its job fails, and a late return does not change that result. |
+| W11 | A server restart does not stop the worker. The worker reconnects and runs a job pushed after the restart. |
+| W12 | The worker sends its thread count in `BEAT`. When the reply has `concurrency`, it starts or stops threads, lets a thread that stops finish its job, and reports the new count in a `BEAT` at once, not at the next interval. |

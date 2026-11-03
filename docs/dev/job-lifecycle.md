@@ -34,11 +34,15 @@ delay_seconds = count^4 + 15 + random(0..30) * (count + 1)
 
 The `failure` field records the retry count, the failure time, the next retry time, the error type, the message, and the backtrace.
 
-## Worker shutdown
+## Server shutdown
 
-1. The server sends `quiet` in the `BEAT` reply. The worker stops fetching.
-2. The server sends `terminate`. The worker fails its running jobs within 30 seconds, then ends.
-3. Jobs that do not receive `ACK` or `FAIL` return through the reservation timeout.
+1. The server closes its port, so no new client connects.
+2. The server stops giving out jobs. `FETCH` returns no job, and the jobs in the queues stay there.
+3. Running jobs can still send `ACK` or `FAIL` on their open connections.
+4. The server stops when no job runs, when no client is connected, or when `SHUTDOWN_TIMEOUT` ends.
+5. Jobs that did not report return through the reservation timeout after the restart.
+
+The server does not send `quiet` or `terminate` for its own shutdown. A worker that gets `quiet` stays quiet, so after a restart it would never fetch again. Workers reconnect and fetch again when the server comes back. `quiet` and `terminate` in the `BEAT` reply stay in the protocol for an operator who stops workers.
 
 ## Death hook
 

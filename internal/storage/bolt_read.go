@@ -66,7 +66,13 @@ func (f JobFilter) matchJob(j *job.Job, wid string) bool {
 		return false
 	}
 
-	return strings.Contains(j.Type, f.JobType)
+	if strings.Contains(j.Type, f.JobType) {
+		return true
+	}
+
+	wrapped := j.Wrapped()
+
+	return wrapped != "" && strings.Contains(wrapped, f.JobType)
 }
 
 type JobGroup struct {

@@ -38,9 +38,31 @@ type WorkerInfo struct {
 	PID         int
 	Labels      []string
 	Concurrency int
+	Tag         string
+	Queues      []string
 	Connections int
 	State       string
+	Started     time.Time
 	LastBeat    time.Time
+
+	// Base is the thread count in HELLO, and Limit the most that the worker
+	// can run, or 0 for no limit. Scalable is true once the worker sends its
+	// thread count in BEAT. Wanted is the count that the worker must run, or
+	// 0 when it runs the right count.
+	Base      int
+	Limit     int
+	Scalable  bool
+	Wanted    int
+	Autoscale *Autoscale
+
+	// Saved is true when the worker runs on a setting that an operator saved
+	// for its name. config is the autoscale from HELLO, which a reset brings
+	// back. manual is the last thread count that an operator set.
+	Saved  bool
+	config *Autoscale
+	manual int
+
+	lowSince time.Time
 }
 
 type Manager struct {
@@ -51,6 +73,7 @@ type Manager struct {
 	arrival   chan struct{}
 	workers   map[string]*WorkerInfo
 	state     string
+	draining  bool
 	throttles map[string]storage.Throttle
 
 	flushMu   sync.Mutex
@@ -83,16 +106,17 @@ func (m *Manager) Push(j *job.Job) error {
 	return nil
 }
 
-// Fetch returns nil when no job arrives in the wait time.
+// Fetch returns nil when no job arrives in the wait time, and at once while
+// the server drains.
 func (m *Manager) Fetch(ctx context.Context, queues []string, wid string) (*job.Job, error) {
-	if m.State() != StateRunning {
-		return nil, nil
-	}
-
 	timer := time.NewTimer(fetchWait)
 	defer timer.Stop()
 
 	for {
+		if !m.givesJobs() {
+			return nil, nil
+		}
+
 		arrival := m.arrivalSignal()
 
 		fetched, err := m.store.Fetch(queues, wid, time.Now())
@@ -309,6 +333,8 @@ func (m *Manager) Tick(now time.Time) error {
 		}
 	}
 
+	m.metrics.sampleThreads(m.connectedThreads(), now)
+
 	if err := m.tickMetrics(now); err != nil {
 		return err
 	}
@@ -337,20 +363,33 @@ func (m *Manager) Run(ctx context.Context, onError func(error)) {
 // Register records a worker connection. A process can open many connections
 // with one worker id.
 func (m *Manager) Register(info WorkerInfo) {
+	saved, found := m.loadSetting(workerName(info.Hostname, info.Tag))
+
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	current := m.workers[info.WID]
 
+	// Each connection of a process sends HELLO. Only the first one sets the
+	// threads and autoscale, so that a later connection does not undo a change.
+	// A setting that an operator saved for the worker name wins over HELLO.
 	if current == nil {
-		current = &WorkerInfo{WID: info.WID}
+		current = &WorkerInfo{WID: info.WID, Started: time.Now(), Concurrency: info.Concurrency, Base: info.Concurrency, Limit: max(info.Limit, 0)}
 		m.workers[info.WID] = current
+
+		current.config = helloAutoscale(info.Autoscale, current.Base, current.Limit)
+		current.Autoscale = copyScale(current.config)
+
+		if found {
+			applySetting(current, saved)
+		}
 	}
 
 	current.Hostname = info.Hostname
 	current.PID = info.PID
 	current.Labels = info.Labels
-	current.Concurrency = info.Concurrency
+	current.Tag = info.Tag
+	current.Queues = info.Queues
 	current.Connections++
 	current.LastBeat = time.Now()
 }
@@ -364,22 +403,49 @@ func (m *Manager) Disconnect(wid string) {
 	}
 }
 
-// Beat records liveness and returns the state that the worker must take.
-func (m *Manager) Beat(wid, reportedState string) string {
+// Beat records liveness. It returns the state that the worker must take, and
+// the thread count that it must run, or 0 for no change. A worker reports
+// its threads in concurrency, or 0 when it cannot change them.
+func (m *Manager) Beat(wid, reportedState string, concurrency int) (string, int) {
+	load := m.loadFor(wid)
+	now := time.Now()
+
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	current := m.workers[wid]
 
 	if current == nil {
-		current = &WorkerInfo{WID: wid}
+		current = &WorkerInfo{WID: wid, Started: now}
 		m.workers[wid] = current
 	}
 
-	current.LastBeat = time.Now()
+	current.LastBeat = now
 	current.State = reportedState
 
-	return m.state
+	if concurrency > 0 {
+		current.Scalable = true
+		current.Concurrency = concurrency
+	}
+
+	if !current.Scalable {
+		return m.state, 0
+	}
+
+	// A beat that reports a count that the server asked for only confirms the
+	// change. Autoscale waits for the next beat, so one change is not stacked
+	// on top of a change that just happened.
+	confirms := current.Wanted > 0 && concurrency == current.Wanted
+
+	if current.Autoscale != nil && load != nil && !confirms {
+		autoscale(current, *load, now)
+	}
+
+	if current.Wanted == current.Concurrency {
+		current.Wanted = 0
+	}
+
+	return m.state, current.Wanted
 }
 
 // Workers returns a copy of the worker table, sorted by host.
@@ -412,11 +478,46 @@ func (m *Manager) SetState(state string) {
 	m.wake()
 }
 
+// Drain stops Fetch from giving out jobs. ACK and FAIL still work, so that
+// running jobs can report before the server stops. Workers do not see a state
+// change, so they fetch again when the server comes back.
+func (m *Manager) Drain() {
+	m.mu.Lock()
+	m.draining = true
+	m.mu.Unlock()
+
+	m.wake()
+}
+
+func (m *Manager) givesJobs() bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	return m.state == StateRunning && !m.draining
+}
+
 func (m *Manager) State() string {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	return m.state
+}
+
+// connectedThreads is the sum of threads of the workers that have a
+// connection now.
+func (m *Manager) connectedThreads() uint64 {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	var threads uint64
+
+	for _, worker := range m.workers {
+		if worker.Connections > 0 {
+			threads += uint64(max(worker.Concurrency, 0))
+		}
+	}
+
+	return threads
 }
 
 func (m *Manager) WorkerCount() int {

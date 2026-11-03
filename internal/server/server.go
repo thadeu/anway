@@ -86,13 +86,12 @@ func (s *Server) Serve(ctx context.Context, listener net.Listener) error {
 	}
 }
 
-// Shutdown sends quiet, then terminate, and closes the connections that remain.
+// Shutdown stops giving out jobs, waits for running jobs to report, and
+// closes the connections. It sends no quiet or terminate: those stop a worker
+// for good, and a worker must fetch again when the server comes back.
 func (s *Server) Shutdown(timeout time.Duration) {
-	s.manager.SetState(manager.StateQuiet)
-	s.waitForConnections(timeout / 2)
-
-	s.manager.SetState(manager.StateTerminate)
-	s.waitForConnections(timeout / 2)
+	s.manager.Drain()
+	s.waitForReports(timeout)
 
 	s.mu.Lock()
 
@@ -104,15 +103,15 @@ func (s *Server) Shutdown(timeout time.Duration) {
 	s.wg.Wait()
 }
 
-func (s *Server) waitForConnections(timeout time.Duration) {
+// waitForReports returns when no job runs, when no client is connected to
+// report one, or when the timeout ends. Jobs that do not report return through
+// the reservation timeout after the restart.
+func (s *Server) waitForReports(timeout time.Duration) {
 	deadline := time.Now().Add(timeout)
 
 	for time.Now().Before(deadline) {
-		s.mu.Lock()
-		open := len(s.conns)
-		s.mu.Unlock()
-
-		if open == 0 {
+		stats, err := s.manager.Stats()
+		if err != nil || stats.Working == 0 || s.connectionCount() == 0 {
 			return
 		}
 
@@ -161,6 +160,11 @@ type hello struct {
 	PID         int      `json:"pid"`
 	Labels      []string `json:"labels"`
 	Concurrency int      `json:"concurrency"`
+	Tag         string   `json:"tag"`
+	Queues      []string `json:"queues"`
+
+	Autoscale      *manager.Autoscale `json:"autoscale"`
+	MaxConcurrency int                `json:"max_concurrency"`
 }
 
 func (s *Server) handle(ctx context.Context, conn net.Conn) {
@@ -256,6 +260,10 @@ func (s *Server) handshake(current *session) error {
 			PID:         request.PID,
 			Labels:      request.Labels,
 			Concurrency: request.Concurrency,
+			Tag:         request.Tag,
+			Queues:      request.Queues,
+			Autoscale:   request.Autoscale,
+			Limit:       request.MaxConcurrency,
 		})
 	}
 
@@ -571,6 +579,7 @@ func (s *Server) beat(current *session, args []byte) error {
 	var request struct {
 		WID          string `json:"wid"`
 		CurrentState string `json:"current_state"`
+		Concurrency  int    `json:"concurrency"`
 	}
 
 	if err := json.Unmarshal(args, &request); err != nil {
@@ -581,12 +590,25 @@ func (s *Server) beat(current *session, args []byte) error {
 		return errors.New("BEAT wid does not match this connection")
 	}
 
-	state := s.manager.Beat(request.WID, request.CurrentState)
-	if state == manager.StateRunning {
+	state, wanted := s.manager.Beat(request.WID, request.CurrentState, request.Concurrency)
+
+	if state == manager.StateRunning && wanted == 0 {
 		return protocol.WriteSimple(current.conn, "OK")
 	}
 
-	encoded, err := json.Marshal(map[string]string{"state": state})
+	// A Faktory client reads only state, so a new thread count does not
+	// change it.
+	reply := map[string]any{}
+
+	if state != manager.StateRunning {
+		reply["state"] = state
+	}
+
+	if wanted > 0 {
+		reply["concurrency"] = wanted
+	}
+
+	encoded, err := json.Marshal(reply)
 	if err != nil {
 		return err
 	}

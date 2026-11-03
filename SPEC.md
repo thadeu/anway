@@ -28,7 +28,7 @@ The long-term product is a paid monthly SaaS. The core comes first.
 - FR5: The server MUST treat an expired reservation as a failure.
 - FR6: The server MUST reject a `PUSH` with a `jid` that already exists.
 - FR7: The server MUST support password authentication.
-- FR8: The server MUST send `quiet` and `terminate` through `BEAT` at shutdown.
+- FR8: At shutdown, the server MUST stop giving out jobs and MUST accept `ACK` and `FAIL` until no job runs or `SHUTDOWN_TIMEOUT` ends. It MUST NOT send `quiet` or `terminate` for its own shutdown, because a worker that gets them stays stopped after the server returns.
 
 ### Non-functional requirements
 
@@ -49,7 +49,7 @@ These numbers are initial targets, not measurements.
 
 | Phase | Scope |
 |---|---|
-| 2 | Web UI. Done: HTTP API, metrics in memory, death hook, cron, queue pause, `MUTATE`, `INFO` format |
+| 2 | Web UI. Done: HTTP API, metrics in memory, death hook, cron, queue pause, `MUTATE`, `INFO` format, worker threads and autoscale |
 | 3 | Done: unique jobs, expiring jobs, throttling, batches, job tracking |
 | 4 | Replication and high availability |
 | 5 | SaaS: tenants, quotas, authentication with clowk, billing with contagorda-pay |

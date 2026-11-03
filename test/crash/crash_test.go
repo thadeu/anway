@@ -527,3 +527,100 @@ func TestBatchSurvivesKill(t *testing.T) {
 
 	server.Process.Kill()
 }
+
+// TestWorkerSettingSurvivesKill saves a console setting for a worker name,
+// kills the server, and checks that a new process with that name gets it.
+func TestWorkerSettingSurvivesKill(t *testing.T) {
+	binary := filepath.Join(t.TempDir(), "server")
+
+	build := exec.Command("go", "build", "-o", binary, "github.com/thadeu/anway/cmd/server")
+	if output, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("build failed: %s", output)
+	}
+
+	dir := t.TempDir()
+	addr := freeAddr(t)
+	web := freeAddr(t)
+
+	t.Setenv("WEB_ADDR", web)
+
+	server := startServer(t, binary, dir, addr)
+	first := connectWorker(t, addr, "first")
+
+	body := strings.NewReader(`{"autoscale":{"min":1,"max":1}}`)
+	request, _ := http.NewRequest(http.MethodPatch, "http://"+web+"/api/v1/workers/first", body)
+
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	response.Body.Close()
+
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("the setting was not saved: %d", response.StatusCode)
+	}
+
+	first.Close()
+	server.Process.Kill()
+	server.Wait()
+
+	startServer(t, binary, dir, addr)
+
+	second := connectWorker(t, addr, "second")
+	defer second.Close()
+
+	response, err = http.Get("http://" + web + "/api/v1/workers")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var listed struct {
+		Workers []struct {
+			WID       string         `json:"wid"`
+			Saved     bool           `json:"saved"`
+			Autoscale map[string]int `json:"autoscale"`
+		} `json:"workers"`
+	}
+
+	json.NewDecoder(response.Body).Decode(&listed)
+	response.Body.Close()
+
+	if len(listed.Workers) != 1 || !listed.Workers[0].Saved || listed.Workers[0].Autoscale["max"] != 1 {
+		t.Fatalf("the saved 1-1 must win over max 50 from HELLO after a kill: %+v", listed.Workers)
+	}
+}
+
+// connectWorker opens a worker connection with a fixed name and autoscale up
+// to 50 in HELLO, and sends a first BEAT with its threads.
+func connectWorker(t *testing.T, addr, wid string) net.Conn {
+	t.Helper()
+
+	conn, err := net.Dial("tcp", addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	read := func() string {
+		buffer := make([]byte, 512)
+
+		conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+
+		n, _ := conn.Read(buffer)
+
+		return string(buffer[:n])
+	}
+
+	read()
+
+	fmt.Fprintf(conn, `HELLO {"v":2,"wid":%q,"hostname":"mac","tag":"shop","concurrency":1,"autoscale":{"max":50}}`+"\r\n", wid)
+
+	if reply := read(); !strings.HasPrefix(reply, "+OK") {
+		t.Fatalf("HELLO failed: %q", reply)
+	}
+
+	fmt.Fprintf(conn, `BEAT {"wid":%q,"concurrency":1}`+"\r\n", wid)
+	read()
+
+	return conn
+}

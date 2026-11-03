@@ -23,7 +23,8 @@ Other components use only the storage interface, so the engine can change later.
 | `batch_expiry` | `time/bid` | None | Sweep index for batches |
 | `tracks` | `jid` | JSON | Job progress |
 | `track_expiry` | `time/jid` | None | Sweep index for tracks |
-| `metrics` | Minute | JSON | Done and failed counts for each minute, and done counts for each queue |
+| `metrics` | Minute | JSON | Done and failed counts for each minute, the peak of worker threads (`t`), and done counts for each queue |
+| `worker_settings` | Worker name (hostname, NUL, tag) | JSON | The threads or autoscale that an operator saved for the name |
 | `meta` | Name | Value | Metadata, such as the schema version |
 
 `seq` comes from `Bucket.NextSequence`. `seq` and `time` are big-endian `uint64` values, so key order equals time order.

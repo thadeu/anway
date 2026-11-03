@@ -331,35 +331,72 @@ func TestPassword(t *testing.T) {
 	client.Close()
 }
 
-func TestShutdownSendsQuietThenTerminate(t *testing.T) {
+// TestShutdownDrainsWithoutQuiet checks that a stopping server gives out no
+// job, lets a running job report, and does not send quiet or terminate, so a
+// worker fetches again when the server comes back.
+func TestShutdownDrainsWithoutQuiet(t *testing.T) {
 	f := start(t, t.TempDir(), "")
 	worker := dial(t, f, "w1")
+
+	push(t, worker, map[string]any{"jid": "running"})
+
+	if fetched := fetch(t, worker, "default"); fetched == nil || fetched["jid"] != "running" {
+		t.Fatalf("unexpected job: %v", fetched)
+	}
+
+	push(t, worker, map[string]any{"jid": "waiting"})
+
 	done := make(chan struct{})
 
 	go func() {
-		f.server.Shutdown(400 * time.Millisecond)
+		f.server.Shutdown(5 * time.Second)
 		close(done)
 	}()
 
 	time.Sleep(100 * time.Millisecond)
 
 	reply, err := worker.Command("BEAT", map[string]string{"wid": "w1"})
-	if err != nil || !strings.Contains(reply, "quiet") {
-		t.Fatalf("unexpected reply: %q %v", reply, err)
+	if err != nil || strings.Contains(reply, "quiet") || strings.Contains(reply, "terminate") {
+		t.Fatalf("a stopping server must not stop the worker: %q %v", reply, err)
 	}
 
 	if fetched := fetch(t, worker, "default"); fetched != nil {
-		t.Fatalf("quiet worker received a job: %v", fetched)
+		t.Fatalf("a draining server gave out a job: %v", fetched)
 	}
 
-	time.Sleep(200 * time.Millisecond)
+	started := time.Now()
 
-	reply, err = worker.Command("BEAT", map[string]string{"wid": "w1"})
-	if err != nil || !strings.Contains(reply, "terminate") {
-		t.Fatalf("unexpected reply: %q %v", reply, err)
+	if _, err := worker.Command("ACK", map[string]string{"jid": "running"}); err != nil {
+		t.Fatalf("a running job must report during the drain: %v", err)
 	}
 
-	<-done
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("shutdown must end when no job runs")
+	}
+
+	if elapsed := time.Since(started); elapsed > time.Second {
+		t.Fatalf("shutdown took %v after the last report", elapsed)
+	}
+
+	if current := stats(t, f); current.Queues["default"] != 1 || current.Working != 0 {
+		t.Fatalf("the waiting job must stay in its queue: %+v", current)
+	}
+}
+
+func TestShutdownEndsAtOnceWhenNoJobRuns(t *testing.T) {
+	f := start(t, t.TempDir(), "")
+
+	dial(t, f, "idle")
+
+	started := time.Now()
+
+	f.server.Shutdown(5 * time.Second)
+
+	if elapsed := time.Since(started); elapsed > 500*time.Millisecond {
+		t.Fatalf("an idle server must stop at once, took %v", elapsed)
+	}
 }
 
 func TestBeatNeedsOwnWorkerID(t *testing.T) {
@@ -1070,13 +1107,17 @@ func TestHelloRegistersWorkerData(t *testing.T) {
 	reader := bufio.NewReader(conn)
 
 	reader.ReadString('\n')
-	io.WriteString(conn, `HELLO {"v":2,"wid":"w9","hostname":"mta-1","pid":42,"labels":["go"],"concurrency":200}`+"\r\n")
+	io.WriteString(conn, `HELLO {"v":2,"wid":"w9","hostname":"mta-1","pid":42,"labels":["go"],"concurrency":200,"tag":"billing","queues":["critical","default"]}`+"\r\n")
 	reader.ReadString('\n')
 
 	workers := f.manager.Workers()
 
 	if len(workers) != 1 || workers[0].Concurrency != 200 || workers[0].Hostname != "mta-1" || workers[0].Connections != 1 {
 		t.Fatalf("unexpected workers: %+v", workers)
+	}
+
+	if workers[0].Tag != "billing" || len(workers[0].Queues) != 2 || workers[0].Started.IsZero() {
+		t.Fatalf("a worker needs its tag, queues, and start: %+v", workers[0])
 	}
 
 	conn.Close()
@@ -1089,5 +1130,47 @@ func TestHelloRegistersWorkerData(t *testing.T) {
 
 	if f.manager.Workers()[0].Connections != 0 {
 		t.Fatal("a closed connection must count down")
+	}
+}
+
+func TestBeatCarriesTheWantedThreads(t *testing.T) {
+	f := start(t, t.TempDir(), "")
+
+	conn, err := net.Dial("tcp", f.addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+
+	reader := bufio.NewReader(conn)
+
+	reader.ReadString('\n')
+	io.WriteString(conn, `HELLO {"v":2,"wid":"w5","concurrency":5}`+"\r\n")
+	reader.ReadString('\n')
+
+	io.WriteString(conn, `BEAT {"wid":"w5"}`+"\r\n")
+
+	if line, _ := reader.ReadString('\n'); line != "+OK\r\n" {
+		t.Fatalf("a Faktory beat must get OK: %q", line)
+	}
+
+	io.WriteString(conn, `BEAT {"wid":"w5","concurrency":5}`+"\r\n")
+	reader.ReadString('\n')
+
+	if err := f.manager.SetConcurrency("w5", 9); err != nil {
+		t.Fatal(err)
+	}
+
+	io.WriteString(conn, `BEAT {"wid":"w5","concurrency":5}`+"\r\n")
+	reader.ReadString('\n')
+
+	if line, _ := reader.ReadString('\n'); line != `{"concurrency":9}`+"\r\n" {
+		t.Fatalf("the beat must carry the wanted count and no state: %q", line)
+	}
+
+	io.WriteString(conn, `BEAT {"wid":"w5","concurrency":9}`+"\r\n")
+
+	if line, _ := reader.ReadString('\n'); line != "+OK\r\n" {
+		t.Fatalf("after the change, the beat must get OK: %q", line)
 	}
 }

@@ -169,6 +169,26 @@ func TestOverviewAndMetrics(t *testing.T) {
 	if status := f.call("GET", "/api/v1/metrics?range=90d", nil, nil); status != http.StatusBadRequest {
 		t.Fatalf("unexpected status: %d", status)
 	}
+
+	until := time.Now().UTC()
+	from := until.Add(-10 * time.Minute)
+
+	var window struct {
+		Range  string          `json:"range"`
+		Points []manager.Point `json:"points"`
+	}
+
+	f.call("GET", "/api/v1/metrics?from="+from.Format(time.RFC3339)+"&until="+until.Format(time.RFC3339), nil, &window)
+
+	if window.Range != "custom" || len(window.Points) != 11 || window.Points[10].Done != 1 {
+		t.Fatalf("unexpected window: %+v", window)
+	}
+
+	for _, bad := range []string{"from=x&until=y", "from=" + until.Format(time.RFC3339) + "&until=" + from.Format(time.RFC3339), "from=2000-01-01T00:00:00Z&until=2026-01-01T00:00:00Z"} {
+		if status := f.call("GET", "/api/v1/metrics?"+bad, nil, nil); status != http.StatusBadRequest {
+			t.Fatalf("a bad window must fail: %s %d", bad, status)
+		}
+	}
 }
 
 func TestQueuesPauseResumeClear(t *testing.T) {
@@ -322,6 +342,20 @@ func TestRunningAndWaitingJobsWithFilters(t *testing.T) {
 
 	if len(waiting.Jobs) != 1 || waiting.Jobs[0].JobType != "report.build" || waiting.Next != "" {
 		t.Fatalf("unexpected second waiting page: %+v", waiting)
+	}
+
+	wrapped := &job.Job{JID: "aj1", Type: "ActiveJob", Args: json.RawMessage(`[{}]`), Queue: "default", Custom: json.RawMessage(`{"wrapped":"PublishProductJob"}`)}
+
+	if err := f.manager.Push(wrapped); err != nil {
+		t.Fatal(err)
+	}
+
+	var byClass page
+
+	f.call("GET", "/api/v1/jobs?set=queue:default&jobtype=Publish", nil, &byClass)
+
+	if len(byClass.Jobs) != 1 || byClass.Jobs[0].JID != "aj1" {
+		t.Fatalf("the filter must match the wrapped class: %+v", byClass)
 	}
 
 	var none page
@@ -527,7 +561,7 @@ func TestEnqueue(t *testing.T) {
 func TestWorkersShowConcurrencyAndBusy(t *testing.T) {
 	f := start(t)
 
-	f.manager.Register(manager.WorkerInfo{WID: "w1", Hostname: "mta-1", Labels: []string{"go"}, Concurrency: 200})
+	f.manager.Register(manager.WorkerInfo{WID: "w1", Hostname: "mta-1", Labels: []string{"go"}, Concurrency: 200, Tag: "shop", Queues: []string{"mailers", "default"}})
 	f.push("a", "x", "default", time.Time{})
 
 	if _, err := f.manager.Fetch(t.Context(), []string{"default"}, "w1"); err != nil {
@@ -544,6 +578,10 @@ func TestWorkersShowConcurrencyAndBusy(t *testing.T) {
 		t.Fatalf("unexpected workers: %+v", workers)
 	}
 
+	if workers.Workers[0]["tag"] != "shop" || fmt.Sprint(workers.Workers[0]["queues"]) != "[mailers default]" || workers.Workers[0]["started_seconds"] == nil {
+		t.Fatalf("a worker needs its tag, queues, and start: %+v", workers.Workers[0])
+	}
+
 	var overview struct {
 		Threads map[string]int `json:"threads"`
 	}
@@ -552,6 +590,72 @@ func TestWorkersShowConcurrencyAndBusy(t *testing.T) {
 
 	if overview.Threads["busy"] != 1 || overview.Threads["total"] != 200 {
 		t.Fatalf("unexpected threads: %+v", overview.Threads)
+	}
+}
+
+func TestScaleWorkerSetsThreadsAndAutoscale(t *testing.T) {
+	f := start(t)
+
+	f.manager.Register(manager.WorkerInfo{WID: "old", Concurrency: 5})
+	f.manager.Register(manager.WorkerInfo{WID: "w1", Hostname: "mac", Tag: "shop", Concurrency: 5})
+	f.manager.Beat("w1", "", 5)
+
+	if status := f.call("PATCH", "/api/v1/workers/nobody", map[string]any{"concurrency": 3}, nil); status != http.StatusNotFound {
+		t.Fatalf("an unknown worker must be 404: %d", status)
+	}
+
+	if status := f.call("PATCH", "/api/v1/workers/old", map[string]any{"concurrency": 3}, nil); status != http.StatusConflict {
+		t.Fatalf("a worker that does not report its threads must be 409: %d", status)
+	}
+
+	if status := f.call("PATCH", "/api/v1/workers/w1", map[string]any{"concurrency": 0}, nil); status != http.StatusBadRequest {
+		t.Fatalf("0 threads must be 400: %d", status)
+	}
+
+	var worker map[string]any
+
+	if status := f.call("PATCH", "/api/v1/workers/w1", map[string]any{"concurrency": 12}, &worker); status != http.StatusOK || worker["wanted"] != float64(12) || worker["concurrency"] != float64(5) {
+		t.Fatalf("the reply must show the wanted count: %d %+v", status, worker)
+	}
+
+	f.call("PATCH", "/api/v1/workers/w1", map[string]any{"autoscale": map[string]int{"max": 30}}, &worker)
+
+	if fmt.Sprint(worker["autoscale"]) != "map[max:30 min:5]" || worker["scalable"] != true {
+		t.Fatalf("autoscale must start at the start count: %+v", worker)
+	}
+
+	if status := f.call("PATCH", "/api/v1/workers/w1", map[string]any{"autoscale": map[string]int{"max": 2}}, nil); status != http.StatusBadRequest {
+		t.Fatalf("max under min must be 400: %d", status)
+	}
+
+	if status := f.call("PATCH", "/api/v1/workers/w1", map[string]any{"autoscale": false, "concurrency": 2000}, nil); status != http.StatusBadRequest {
+		t.Fatalf("a bad count must be 400: %d", status)
+	}
+
+	f.call("GET", "/api/v1/workers", nil, nil)
+
+	if f.manager.Workers()[1].Autoscale == nil {
+		t.Fatal("a refused change must not turn autoscale off")
+	}
+
+	if worker := f.manager.Workers()[1]; !worker.Saved {
+		t.Fatal("a change for a named worker must be saved")
+	}
+
+	if status := f.call("PATCH", "/api/v1/workers/w1", map[string]any{"reset": true, "concurrency": 3}, nil); status != http.StatusBadRequest {
+		t.Fatalf("a reset with a change must be 400: %d", status)
+	}
+
+	f.call("PATCH", "/api/v1/workers/w1", map[string]any{"reset": true}, &worker)
+
+	if worker["saved"] != false {
+		t.Fatalf("a reset must drop the saved setting: %+v", worker)
+	}
+
+	f.call("PATCH", "/api/v1/workers/w1", map[string]any{"autoscale": false}, &worker)
+
+	if worker["autoscale"] != nil {
+		t.Fatalf("false must turn autoscale off: %+v", worker)
 	}
 }
 

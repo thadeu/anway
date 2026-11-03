@@ -15,7 +15,7 @@ Env vars do not have a product prefix, so a rename does not change deployments.
 | `WEB_TOKEN` | Empty | HTTP API token. Required when `WEB_ADDR` is not a loopback address. |
 | `METRICS_RETENTION` | `24h` | Time that saved metrics stay. From `1h` to `60d`. Accepts Go durations and days, such as `30d`. |
 | `BACKUP_DIR` | `$DATA_DIR/backups` | Snapshot directory. |
-| `SHUTDOWN_TIMEOUT` | `30s` | Time for workers to finish |
+| `SHUTDOWN_TIMEOUT` | `30s` | Most time for running jobs to report at shutdown. The server stops sooner when no job runs. |
 | `LOG_LEVEL` | `info` | Log level |
 
 The server does not start with a public address and no password.

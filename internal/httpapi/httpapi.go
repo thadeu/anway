@@ -66,6 +66,7 @@ func (a *API) routes() http.Handler {
 	mux.HandleFunc("POST /api/v1/jobs/actions", a.actions)
 	mux.HandleFunc("POST /api/v1/jobs", a.enqueue)
 	mux.HandleFunc("GET /api/v1/workers", a.workers)
+	mux.HandleFunc("PATCH /api/v1/workers/{wid}", a.scaleWorker)
 	mux.HandleFunc("GET /api/v1/schedules", a.schedules)
 	mux.HandleFunc("GET /api/v1/batches", a.batches)
 
@@ -141,8 +142,19 @@ func (a *API) overview(w http.ResponseWriter, _ *http.Request) {
 	})
 }
 
+// maxWindow is the longest window that from and until can ask for.
+const maxWindow = 60 * 24 * time.Hour
+
 func (a *API) metrics(w http.ResponseWriter, r *http.Request) {
-	rangeName := r.URL.Query().Get("range")
+	query := r.URL.Query()
+
+	if query.Get("from") != "" || query.Get("until") != "" {
+		a.window(w, query.Get("from"), query.Get("until"))
+
+		return
+	}
+
+	rangeName := query.Get("range")
 	if rangeName == "" {
 		rangeName = "1h"
 	}
@@ -155,6 +167,34 @@ func (a *API) metrics(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{"range": rangeName, "points": points})
+}
+
+// window answers a custom window, such as a slice that a user drags on the
+// chart. Both ends are RFC 3339 times.
+func (a *API) window(w http.ResponseWriter, fromText, untilText string) {
+	from, fromErr := time.Parse(time.RFC3339, fromText)
+	until, untilErr := time.Parse(time.RFC3339, untilText)
+
+	if fromErr != nil || untilErr != nil {
+		writeError(w, http.StatusBadRequest, "from and until must be RFC 3339 times")
+
+		return
+	}
+
+	if !until.After(from) || until.Sub(from) > maxWindow {
+		writeError(w, http.StatusBadRequest, "until must be after from, and the window at most 60 days")
+
+		return
+	}
+
+	points, err := a.manager.Window(from, until)
+	if err != nil {
+		a.fail(w, err)
+
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{"range": "custom", "from": from.UTC(), "until": until.UTC(), "points": points})
 }
 
 type queueView struct {
@@ -436,25 +476,175 @@ func (a *API) workers(w http.ResponseWriter, _ *http.Request) {
 	views := make([]map[string]any, 0, len(workers))
 
 	for _, worker := range workers {
-		state := worker.State
-		if state == "" {
-			state = "running"
-		}
-
-		views = append(views, map[string]any{
-			"wid":               worker.WID,
-			"hostname":          worker.Hostname,
-			"pid":               worker.PID,
-			"labels":            nonNil(worker.Labels),
-			"concurrency":       worker.Concurrency,
-			"busy":              busy[worker.WID],
-			"connections":       worker.Connections,
-			"state":             state,
-			"last_beat_seconds": int(now.Sub(worker.LastBeat).Seconds()),
-		})
+		views = append(views, workerView(worker, busy[worker.WID], now))
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{"workers": views})
+}
+
+func workerView(worker manager.WorkerInfo, busy int, now time.Time) map[string]any {
+	state := worker.State
+	if state == "" {
+		state = "running"
+	}
+
+	var wanted, limit any
+
+	if worker.Wanted > 0 {
+		wanted = worker.Wanted
+	}
+
+	if worker.Limit > 0 {
+		limit = worker.Limit
+	}
+
+	return map[string]any{
+		"wid":               worker.WID,
+		"hostname":          worker.Hostname,
+		"pid":               worker.PID,
+		"labels":            nonNil(worker.Labels),
+		"concurrency":       worker.Concurrency,
+		"wanted":            wanted,
+		"max_concurrency":   limit,
+		"scalable":          worker.Scalable,
+		"autoscale":         worker.Autoscale,
+		"saved":             worker.Saved,
+		"tag":               worker.Tag,
+		"queues":            nonNil(worker.Queues),
+		"started_seconds":   int(now.Sub(worker.Started).Seconds()),
+		"busy":              busy,
+		"connections":       worker.Connections,
+		"state":             state,
+		"last_beat_seconds": int(now.Sub(worker.LastBeat).Seconds()),
+	}
+}
+
+// scaleWorker changes the threads of one worker. The body has concurrency,
+// autoscale as {"max": n} or {"min": n, "max": n}, or both. autoscale false
+// turns autoscale off. The worker gets the change at its next beat.
+func (a *API) scaleWorker(w http.ResponseWriter, r *http.Request) {
+	wid := r.PathValue("wid")
+
+	var request struct {
+		Concurrency *int            `json:"concurrency"`
+		Autoscale   json.RawMessage `json:"autoscale"`
+		Reset       bool            `json:"reset"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid body: "+err.Error())
+
+		return
+	}
+
+	if request.Reset {
+		a.resetWorker(w, wid, request.Concurrency != nil || request.Autoscale != nil)
+
+		return
+	}
+
+	if request.Concurrency == nil && request.Autoscale == nil {
+		writeError(w, http.StatusBadRequest, "set concurrency, autoscale, both, or reset")
+
+		return
+	}
+
+	change := manager.ScaleChange{SetAutoscale: request.Autoscale != nil}
+
+	if request.Concurrency != nil {
+		if *request.Concurrency == 0 {
+			writeError(w, http.StatusBadRequest, manager.ErrBadConcurrency.Error())
+
+			return
+		}
+
+		change.Concurrency = *request.Concurrency
+	}
+
+	if change.SetAutoscale {
+		scale, err := readAutoscale(request.Autoscale)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+
+			return
+		}
+
+		change.Autoscale = scale
+	}
+
+	if err := a.manager.Scale(wid, change); err != nil {
+		scaleError(w, err)
+
+		return
+	}
+
+	a.workerReply(w, wid)
+}
+
+// resetWorker drops the saved setting of a worker name, and brings back the
+// config of the worker. A reset goes alone, so a body cannot ask for a change
+// and its undo at once.
+func (a *API) resetWorker(w http.ResponseWriter, wid string, mixed bool) {
+	if mixed {
+		writeError(w, http.StatusBadRequest, "reset goes alone, without concurrency or autoscale")
+
+		return
+	}
+
+	if err := a.manager.Scale(wid, manager.ScaleChange{Reset: true}); err != nil {
+		scaleError(w, err)
+
+		return
+	}
+
+	a.workerReply(w, wid)
+}
+
+// readAutoscale reads false or null as off, and an object as on.
+func readAutoscale(raw json.RawMessage) (*manager.Autoscale, error) {
+	text := strings.TrimSpace(string(raw))
+
+	if text == "false" || text == "null" {
+		return nil, nil
+	}
+
+	var scale manager.Autoscale
+
+	if err := json.Unmarshal(raw, &scale); err != nil {
+		return nil, errors.New(`autoscale must be false, or {"max": n}`)
+	}
+
+	return &scale, nil
+}
+
+func scaleError(w http.ResponseWriter, err error) {
+	switch {
+	case errors.Is(err, manager.ErrUnknownWorker):
+		writeError(w, http.StatusNotFound, err.Error())
+	case errors.Is(err, manager.ErrNotScalable):
+		writeError(w, http.StatusConflict, err.Error())
+	default:
+		writeError(w, http.StatusBadRequest, err.Error())
+	}
+}
+
+func (a *API) workerReply(w http.ResponseWriter, wid string) {
+	busy, err := a.manager.BusyByWorker()
+	if err != nil {
+		a.fail(w, err)
+
+		return
+	}
+
+	for _, worker := range a.manager.Workers() {
+		if worker.WID == wid {
+			writeJSON(w, http.StatusOK, workerView(worker, busy[wid], time.Now()))
+
+			return
+		}
+	}
+
+	writeError(w, http.StatusNotFound, manager.ErrUnknownWorker.Error())
 }
 
 func (a *API) schedules(w http.ResponseWriter, _ *http.Request) {

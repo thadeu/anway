@@ -129,6 +129,7 @@ type options struct {
 	Callback    string    `json:"_cb"`
 	Track       float64   `json:"track"`
 	OnDead      *DeadHook `json:"on_dead"`
+	Wrapped     string    `json:"wrapped"`
 }
 
 // DeadHook names a job that the server pushes when this job dies.
@@ -258,6 +259,12 @@ func (j *Job) BatchCallback() (string, string) {
 // DeadHook returns the job to push when this job dies, or nil.
 func (j *Job) DeadHook() *DeadHook {
 	return j.options().OnDead
+}
+
+// Wrapped is the class that a wrapper job runs, such as the Active Job class
+// of a job with the type ActiveJob. It is blank for other jobs.
+func (j *Job) Wrapped() string {
+	return j.options().Wrapped
 }
 
 func (j *Job) Tracked() bool {

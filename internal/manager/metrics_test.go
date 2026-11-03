@@ -166,3 +166,123 @@ func TestSecondSeriesAndLiveRate(t *testing.T) {
 		t.Fatalf("live rate must average the last complete seconds: %v", done)
 	}
 }
+
+func TestWindowReadsMemoryAndDiskWithAStep(t *testing.T) {
+	store := openStore(t, t.TempDir())
+	defer store.Close()
+
+	m := New(store)
+	now := time.Now()
+	current := now.Unix() / 60
+
+	if err := store.SaveMetrics([]storage.MetricMinute{{Minute: current - 2*1440, Done: 4}}); err != nil {
+		t.Fatal(err)
+	}
+
+	processOne(t, m, "a")
+
+	old, err := m.Window(time.Unix((current-2*1440-3)*60, 0), time.Unix((current-2*1440+3)*60, 0))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	total := uint64(0)
+
+	for _, point := range old {
+		total += point.Done
+	}
+
+	if len(old) != 7 || total != 4 {
+		t.Fatalf("an old window must read saved minutes by minute: %d points, %d done", len(old), total)
+	}
+
+	day, err := m.Window(now.Add(-6*time.Hour), now)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(day) > windowPoints || day[1].Time.Sub(day[0].Time) != 5*time.Minute || day[len(day)-1].Done != 1 {
+		t.Fatalf("a 6 hour window must use 5 minute steps and include the last minute: %d points", len(day))
+	}
+}
+
+func TestThreadsKeepThePeakOfTheMinuteAndSurviveRestart(t *testing.T) {
+	dir := t.TempDir()
+	store := openStore(t, dir)
+	first := New(store)
+
+	if err := first.RestoreMetrics(24 * time.Hour); err != nil {
+		t.Fatal(err)
+	}
+
+	first.Register(WorkerInfo{WID: "a", Concurrency: 5})
+	first.Register(WorkerInfo{WID: "b", Concurrency: 10})
+
+	now := time.Now()
+
+	if err := first.Tick(now); err != nil {
+		t.Fatal(err)
+	}
+
+	first.Beat("b", "", 20)
+
+	if err := first.Tick(now); err != nil {
+		t.Fatal(err)
+	}
+
+	first.Beat("b", "", 4)
+	first.Disconnect("a")
+
+	if err := first.Tick(now); err != nil {
+		t.Fatal(err)
+	}
+
+	points, err := first.Series("15m")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if threads := points[len(points)-1].Threads; threads != 25 {
+		t.Fatalf("the minute must keep the peak of 5 + 20 threads: %d", threads)
+	}
+
+	if err := first.SaveMetrics(); err != nil {
+		t.Fatal(err)
+	}
+
+	store.Close()
+
+	store = openStore(t, dir)
+	defer store.Close()
+
+	second := New(store)
+
+	if err := second.RestoreMetrics(24 * time.Hour); err != nil {
+		t.Fatal(err)
+	}
+
+	points, err = second.Series("15m")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if threads := points[len(points)-1].Threads; threads != 25 {
+		t.Fatalf("the peak must survive a restart: %d", threads)
+	}
+}
+
+func TestAStepShowsThePeakThreadsNotTheSum(t *testing.T) {
+	m := newMetrics()
+	now := time.Unix(1_800_000_000, 0)
+
+	m.sampleThreads(7, now.Add(-time.Minute))
+	m.sampleThreads(9, now)
+	m.add("", 3, 0, now.Add(-time.Minute))
+	m.add("", 4, 0, now)
+
+	points := m.series(2, 2, now)
+
+	if len(points) != 1 || points[0].Threads != 9 || points[0].Done != 7 {
+		t.Fatalf("a step must add done jobs and keep the thread peak: %+v", points)
+	}
+}

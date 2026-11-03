@@ -42,6 +42,13 @@ The Ruby `Anway::Worker` module is the one exception. It is a job API above the 
 - A worker does not cancel a fetch in progress, because the reply can hold a job.
 - After an empty reply that returns at once, the worker waits a short time, because a quiet server replies with no delay.
 
+## Worker threads
+
+- A worker sends its thread count in HELLO and in each `BEAT` as `concurrency`, and its queues and tag in HELLO. See [worker-threads.md](worker-threads.md#client-requirements).
+- When a `BEAT` reply has `concurrency`, the worker starts or stops threads. A thread that stops first finishes its job.
+- A worker with a limit, such as the size of its database pool, sends it in HELLO as `max_concurrency`.
+- The config can start the worker with autoscale on: `autoscale: {max}` in HELLO.
+
 ## anway-js build
 
 Write the source in TypeScript. Use tsup, which uses esbuild, for ESM, CommonJS, and type declarations. Use pnpm and the standard ESLint rules. The public API is `Anway.Client`, `Anway.Worker`, and `Anway.Job`, from the default export.

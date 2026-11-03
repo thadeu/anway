@@ -18,10 +18,11 @@ const (
 )
 
 type bucket struct {
-	minute int64
-	done   uint64
-	failed uint64
-	queues map[string]uint64
+	minute  int64
+	done    uint64
+	failed  uint64
+	threads uint64
+	queues  map[string]uint64
 }
 
 type secondBucket struct {
@@ -30,11 +31,14 @@ type secondBucket struct {
 	failed uint64
 }
 
-// Point is one step of a throughput series.
+// Point is one step of a throughput series. Done and Failed add up over the
+// step. Threads is the peak of worker threads in the step, because a sum of
+// thread counts has no meaning.
 type Point struct {
-	Time   time.Time `json:"time"`
-	Done   uint64    `json:"done"`
-	Failed uint64    `json:"failed"`
+	Time    time.Time `json:"time"`
+	Done    uint64    `json:"done"`
+	Failed  uint64    `json:"failed"`
+	Threads uint64    `json:"threads"`
 }
 
 // metrics keeps the last 24 hours by minute and the last minute by second in
@@ -86,6 +90,25 @@ func (m *metrics) add(queue string, done, failed uint64, now time.Time) {
 	live.failed += failed
 }
 
+// sampleThreads keeps the peak of worker threads in the current minute.
+func (m *metrics) sampleThreads(threads uint64, now time.Time) {
+	minute := now.Unix() / 60
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	slot := &m.total[minute%minutesKept]
+
+	if slot.minute != minute {
+		*slot = bucket{minute: minute}
+	}
+
+	if threads > slot.threads {
+		slot.threads = threads
+		m.dirty[minute] = true
+	}
+}
+
 // series returns the last minutes, grouped in steps. The last point is the
 // current minute, which is not complete.
 func (m *metrics) series(minutes, step int, now time.Time) []Point {
@@ -105,6 +128,7 @@ func (m *metrics) series(minutes, step int, now time.Time) []Point {
 			if slot.minute == minute {
 				point.Done += slot.done
 				point.Failed += slot.failed
+				point.Threads = max(point.Threads, slot.threads)
 			}
 		}
 
@@ -195,7 +219,7 @@ func (m *metrics) takeDirty() []storage.MetricMinute {
 				queues[name] = done
 			}
 
-			minutes = append(minutes, storage.MetricMinute{Minute: minute, Done: slot.done, Failed: slot.failed, Queues: queues})
+			minutes = append(minutes, storage.MetricMinute{Minute: minute, Done: slot.done, Failed: slot.failed, Threads: slot.threads, Queues: queues})
 		}
 
 		delete(m.dirty, minute)
@@ -221,7 +245,7 @@ func (m *metrics) restore(minutes []storage.MetricMinute) {
 	defer m.mu.Unlock()
 
 	for _, saved := range minutes {
-		m.total[saved.Minute%minutesKept] = bucket{minute: saved.Minute, done: saved.Done, failed: saved.Failed, queues: saved.Queues}
+		m.total[saved.Minute%minutesKept] = bucket{minute: saved.Minute, done: saved.Done, failed: saved.Failed, threads: saved.Threads, queues: saved.Queues}
 	}
 }
 
@@ -282,7 +306,80 @@ func (m *Manager) diskSeries(shape rangeShape, now time.Time) ([]Point, error) {
 		for index < len(saved) && saved[index].Minute < end {
 			point.Done += saved[index].Done
 			point.Failed += saved[index].Failed
+			point.Threads = max(point.Threads, saved[index].Threads)
 			index++
+		}
+
+		points = append(points, point)
+	}
+
+	return points, nil
+}
+
+// windowPoints is the most points that Window returns. It picks the smallest
+// step in windowSteps that stays under it.
+const windowPoints = 120
+
+var windowSteps = []int64{1, 5, 10, 15, 30, 60, 120, 240, 480, 720, 1440}
+
+// Window returns the throughput from `from` to `until`, by minute or by a
+// longer step. Minutes of the last 24 hours come from memory, and older ones
+// from the saved minutes. A window shorter than two minutes grows to two.
+func (m *Manager) Window(from, until time.Time) ([]Point, error) {
+	now := time.Now()
+	current := now.Unix() / 60
+	first := from.Unix() / 60
+	last := min(until.Unix()/60, current)
+
+	if last-first < 1 {
+		first = last - 1
+	}
+
+	step := windowSteps[len(windowSteps)-1]
+
+	for _, candidate := range windowSteps {
+		if (last-first+1)/candidate <= windowPoints {
+			step = candidate
+
+			break
+		}
+	}
+
+	byMinute := map[int64]storage.MetricMinute{}
+	memoryFirst := current - minutesKept + 1
+
+	if first < memoryFirst {
+		saved, err := m.store.LoadMetrics(first, min(last, memoryFirst-1))
+		if err != nil {
+			return nil, err
+		}
+
+		for _, minute := range saved {
+			byMinute[minute.Minute] = minute
+		}
+	}
+
+	m.metrics.mu.Lock()
+
+	for minute := max(first, memoryFirst); minute <= last; minute++ {
+		slot := m.metrics.total[minute%minutesKept]
+
+		if slot.minute == minute {
+			byMinute[minute] = storage.MetricMinute{Minute: minute, Done: slot.done, Failed: slot.failed, Threads: slot.threads}
+		}
+	}
+
+	m.metrics.mu.Unlock()
+
+	var points []Point
+
+	for start := first; start <= last; start += step {
+		point := Point{Time: time.Unix(start*60, 0).UTC()}
+
+		for minute := start; minute < start+step && minute <= last; minute++ {
+			point.Done += byMinute[minute].Done
+			point.Failed += byMinute[minute].Failed
+			point.Threads = max(point.Threads, byMinute[minute].Threads)
 		}
 
 		points = append(points, point)

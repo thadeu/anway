@@ -63,6 +63,7 @@ There is no web UI yet.
 - [docs/dev/job-lifecycle.md](docs/dev/job-lifecycle.md): Job states and retries.
 - [docs/dev/storage.md](docs/dev/storage.md): Storage design.
 - [docs/dev/batches.md](docs/dev/batches.md): Batches and job tracking.
+- [docs/dev/worker-threads.md](docs/dev/worker-threads.md): Worker threads and autoscale.
 - [docs/dev/http-api.md](docs/dev/http-api.md): HTTP API for the web UI.
 - [docs/dev/configuration.md](docs/dev/configuration.md): Configuration.
 - [docs/dev/docker.md](docs/dev/docker.md): Docker image.
