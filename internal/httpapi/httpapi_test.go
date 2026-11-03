@@ -3,6 +3,7 @@ package httpapi_test
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -260,6 +261,208 @@ func TestJobsPagesWithCursor(t *testing.T) {
 
 	if status := f.call("GET", "/api/v1/jobs?set=nope", nil, nil); status != http.StatusBadRequest {
 		t.Fatalf("unexpected status: %d", status)
+	}
+}
+
+func TestRunningAndWaitingJobsWithFilters(t *testing.T) {
+	f := start(t)
+
+	for i := range 6 {
+		jobType := "mail.deliver"
+
+		if i%2 == 1 {
+			jobType = "report.build"
+		}
+
+		f.push(fmt.Sprintf("j%d", i), jobType, "default", time.Time{})
+	}
+
+	before := time.Now().Add(-time.Second)
+
+	for _, wid := range []string{"w1", "w1", "w2"} {
+		if _, err := f.manager.Fetch(t.Context(), []string{"default"}, wid); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	type page struct {
+		Jobs []struct {
+			JID        string     `json:"jid"`
+			JobType    string     `json:"jobtype"`
+			Worker     string     `json:"worker"`
+			EnqueuedAt string     `json:"enqueued_at"`
+			StartedAt  *time.Time `json:"started_at"`
+		} `json:"jobs"`
+		Next string `json:"next_cursor"`
+	}
+
+	var running page
+
+	f.call("GET", "/api/v1/jobs?set=working&worker=w1", nil, &running)
+
+	if len(running.Jobs) != 2 || running.Next != "" {
+		t.Fatalf("unexpected running jobs: %+v", running)
+	}
+
+	for _, entry := range running.Jobs {
+		if entry.Worker != "w1" || entry.StartedAt == nil || entry.StartedAt.Before(before) || entry.StartedAt.After(time.Now()) {
+			t.Fatalf("a running job needs its worker and start time: %+v", entry)
+		}
+	}
+
+	var waiting page
+
+	f.call("GET", "/api/v1/jobs?set=queue:default&jobtype=report&limit=1", nil, &waiting)
+
+	if len(waiting.Jobs) != 1 || waiting.Jobs[0].JobType != "report.build" || waiting.Jobs[0].EnqueuedAt == "" || waiting.Next == "" {
+		t.Fatalf("unexpected waiting page: %+v", waiting)
+	}
+
+	f.call("GET", "/api/v1/jobs?set=queue:default&jobtype=report&limit=1&cursor="+waiting.Next, nil, &waiting)
+
+	if len(waiting.Jobs) != 1 || waiting.Jobs[0].JobType != "report.build" || waiting.Next != "" {
+		t.Fatalf("unexpected second waiting page: %+v", waiting)
+	}
+
+	var none page
+
+	f.call("GET", "/api/v1/jobs?set=queue:default&queue=other", nil, &none)
+
+	if len(none.Jobs) != 0 || none.Next != "" {
+		t.Fatalf("the queue filter must match no job: %+v", none)
+	}
+}
+
+func TestWaitingJobsOfAllQueuesOldestFirst(t *testing.T) {
+	f := start(t)
+
+	order := []struct{ jid, queue, jobType string }{
+		{"w1", "beta", "mail.send"},
+		{"w2", "alpha", "report.build"},
+		{"w3", "beta", "mail.send"},
+		{"w4", "gamma", "mail.send"},
+		{"w5", "alpha", "mail.send"},
+	}
+
+	for _, entry := range order {
+		f.push(entry.jid, entry.jobType, entry.queue, time.Time{})
+		time.Sleep(2 * time.Millisecond)
+	}
+
+	type page struct {
+		Jobs []struct {
+			JID string `json:"jid"`
+		} `json:"jobs"`
+		Next string `json:"next_cursor"`
+	}
+
+	var seen []string
+
+	cursor := ""
+
+	for pages := 0; ; pages++ {
+		var current page
+
+		f.call("GET", "/api/v1/jobs?set=waiting&limit=2&cursor="+cursor, nil, &current)
+
+		for _, entry := range current.Jobs {
+			seen = append(seen, entry.JID)
+		}
+
+		cursor = current.Next
+
+		if cursor == "" || pages > 5 {
+			break
+		}
+	}
+
+	if fmt.Sprint(seen) != "[w1 w2 w3 w4 w5]" {
+		t.Fatalf("the waiting jobs must be oldest first across queues: %v", seen)
+	}
+
+	var filtered page
+
+	f.call("GET", "/api/v1/jobs?set=waiting&jobtype=mail&queue=alpha", nil, &filtered)
+
+	if len(filtered.Jobs) != 1 || filtered.Jobs[0].JID != "w5" {
+		t.Fatalf("unexpected filtered jobs: %+v", filtered)
+	}
+
+	if status := f.call("GET", "/api/v1/jobs?set=waiting&cursor=bad", nil, nil); status != http.StatusBadRequest {
+		t.Fatalf("a bad cursor must fail: %d", status)
+	}
+}
+
+func TestKillRunningJobs(t *testing.T) {
+	f := start(t)
+
+	f.push("a1", "video.encode", "media", time.Time{})
+	f.push("a2", "video.encode", "media", time.Time{})
+	f.push("a3", "report.build", "media", time.Time{})
+	f.push("b1", "mail.send", "mail", time.Time{})
+
+	for _, step := range []struct{ queue, wid string }{{"media", "w1"}, {"media", "w1"}, {"media", "w2"}, {"mail", "w2"}} {
+		if _, err := f.manager.Fetch(t.Context(), []string{step.queue}, step.wid); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	var result struct {
+		Changed int `json:"changed"`
+	}
+
+	if status := f.call("POST", "/api/v1/jobs/actions", map[string]any{"action": "requeue", "set": "working", "all": true}, nil); status != http.StatusBadRequest {
+		t.Fatalf("running jobs must accept only kill: %d", status)
+	}
+
+	f.call("POST", "/api/v1/jobs/actions", map[string]any{"action": "kill", "set": "working", "jids": []string{"b1"}}, &result)
+
+	if result.Changed != 1 {
+		t.Fatalf("unexpected kill by jid: %+v", result)
+	}
+
+	f.call("POST", "/api/v1/jobs/actions", map[string]any{"action": "kill", "set": "working", "all": true, "queue": "media", "jobtype": "video"}, &result)
+
+	if result.Changed != 2 {
+		t.Fatalf("the filter must limit kill all: %+v", result)
+	}
+
+	var dead struct {
+		Jobs []struct {
+			JID     string       `json:"jid"`
+			Worker  string       `json:"worker"`
+			Failure *job.Failure `json:"failure"`
+		} `json:"jobs"`
+	}
+
+	f.call("GET", "/api/v1/jobs?set=dead", nil, &dead)
+
+	if len(dead.Jobs) != 3 {
+		t.Fatalf("unexpected dead jobs: %+v", dead)
+	}
+
+	for _, entry := range dead.Jobs {
+		if entry.Failure == nil || entry.Failure.ErrType != "Killed" || entry.Worker != "" {
+			t.Fatalf("a killed job needs a failure and no worker: %+v", entry)
+		}
+	}
+
+	var overview struct {
+		States map[string]int `json:"states"`
+	}
+
+	f.call("GET", "/api/v1/overview", nil, &overview)
+
+	if overview.States["working"] != 1 || overview.States["dead"] != 3 {
+		t.Fatalf("unexpected states: %+v", overview.States)
+	}
+
+	if err := f.manager.Ack("a1"); !errors.Is(err, storage.ErrNotReserved) {
+		t.Fatalf("the worker ACK must fail after a kill: %v", err)
+	}
+
+	if err := f.manager.Ack("a3"); err != nil {
+		t.Fatalf("a job that the filter skipped must still run: %v", err)
 	}
 }
 

@@ -52,5 +52,5 @@ A job with `custom.on_dead` names a job that the server pushes when the job dies
 - The notice goes to its queue in the same transaction as the death, so a crash cannot lose it.
 - Its one arg is a hash with `jid`, `jobtype`, `queue`, `args`, `failure`, and `custom` of the dead job.
 - It fires when the retries end, at `retry: -1`, and when the last reservation expires.
-- It does not fire for a manual kill with `MUTATE`, or for a discard.
+- It does not fire for a manual kill with `MUTATE` or the HTTP API, or for a discard. This includes the kill of a running job.
 - The notice is a normal job with the default retries. It has no hook of its own.

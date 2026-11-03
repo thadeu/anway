@@ -99,6 +99,7 @@ type Mutation struct {
 	Command string
 	Target  string
 	Match   func(j *job.Job, encoded []byte) bool
+	Filter  JobFilter
 }
 
 type Store interface {
@@ -124,7 +125,7 @@ type Store interface {
 	Snapshot(path string) error
 	Stats() (Stats, error)
 	QueueDetails() ([]QueueInfo, error)
-	ListJobs(set, cursor string, limit int) (JobPage, error)
+	ListJobs(set, cursor string, limit int, filter JobFilter) (JobPage, error)
 	JobGroups(set string, maxScan int) (JobGroups, error)
 	BusyByWorker() (map[string]int, error)
 	LeaseCounts(now time.Time) (map[string]int, error)

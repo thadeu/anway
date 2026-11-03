@@ -6,9 +6,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"net"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"sync"
 	"syscall"
 	"testing"
@@ -353,6 +355,97 @@ func drain(t *testing.T, addr string) map[string]bool {
 	}
 
 	return survivors
+}
+
+// TestKilledRunningJobsStayDead kills running jobs through the HTTP API, stops
+// the server with SIGKILL, and checks that the jobs stay dead and that the
+// worker cannot finish them.
+func TestKilledRunningJobsStayDead(t *testing.T) {
+	binary := filepath.Join(t.TempDir(), "server")
+
+	build := exec.Command("go", "build", "-o", binary, "github.com/thadeu/anway/cmd/server")
+	if output, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("build failed: %s", output)
+	}
+
+	dir := t.TempDir()
+	addr := freeAddr(t)
+	web := freeAddr(t)
+
+	t.Setenv("WEB_ADDR", web)
+
+	server := startServer(t, binary, dir, addr)
+
+	client, err := testclient.Dial(addr, "w", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, jid := range []string{"a", "b", "c"} {
+		if _, err := client.Command("PUSH", map[string]any{"jid": jid, "jobtype": "x", "args": []any{}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	for range 2 {
+		if _, err := client.Command("FETCH", "default"); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	body := strings.NewReader(`{"action":"kill","set":"working","all":true,"queue":"default"}`)
+
+	response, err := http.Post("http://"+web+"/api/v1/jobs/actions", "application/json", body)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var result struct {
+		Changed int `json:"changed"`
+	}
+
+	json.NewDecoder(response.Body).Decode(&result)
+	response.Body.Close()
+
+	if result.Changed != 2 {
+		t.Fatalf("unexpected kill result: %+v", result)
+	}
+
+	client.Close()
+	server.Process.Kill()
+	server.Wait()
+
+	startServer(t, binary, dir, addr)
+
+	response, err = http.Get("http://" + web + "/api/v1/overview")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var overview struct {
+		States map[string]int `json:"states"`
+	}
+
+	json.NewDecoder(response.Body).Decode(&overview)
+	response.Body.Close()
+
+	if overview.States["working"] != 0 || overview.States["dead"] != 2 || overview.States["waiting"] != 1 {
+		t.Fatalf("unexpected states after restart: %+v", overview.States)
+	}
+
+	worker, err := testclient.Dial(addr, "w", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer worker.Close()
+
+	if _, err := worker.Command("ACK", map[string]string{"jid": "a"}); err == nil {
+		t.Fatal("the ACK of a killed job must fail")
+	}
+
+	if survivors := drain(t, addr); len(survivors) != 1 || !survivors["c"] {
+		t.Fatalf("unexpected waiting jobs: %v", survivors)
+	}
 }
 
 // TestBatchSurvivesKill stops the server between jobs of a committed batch.

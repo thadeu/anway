@@ -695,7 +695,7 @@ func (b *Bolt) Mutate(mutation Mutation, now time.Time) (int, error) {
 					return err
 				}
 
-				if !mutation.Match(&rec.Job, encoded) {
+				if !mutation.Filter.matchJob(&rec.Job, rec.WID) || !mutation.Match(&rec.Job, encoded) {
 					continue
 				}
 
@@ -745,8 +745,16 @@ func applyMutation(tx *bolt.Tx, rec *record, command string, now time.Time) erro
 		return nil
 	}
 
+	running := rec.State == string(bucketWorking)
+
 	if err := removeFromSet(tx, rec); err != nil {
 		return err
+	}
+
+	if running {
+		if err := endReservation(tx, rec, now); err != nil {
+			return err
+		}
 	}
 
 	switch command {
@@ -761,6 +769,27 @@ func applyMutation(tx *bolt.Tx, rec *record, command string, now time.Time) erro
 	default:
 		return tx.Bucket(bucketJobs).Delete([]byte(rec.Job.JID))
 	}
+}
+
+// endReservation takes a running job from its worker. The worker process does
+// not stop, and its ACK or FAIL for the job then gets ErrNotReserved. The job
+// counts as failed in its batch.
+func endReservation(tx *bolt.Tx, rec *record, now time.Time) error {
+	if err := releaseLease(tx, rec); err != nil {
+		return err
+	}
+
+	firstFailure := rec.Job.Failure == nil
+	retries := 0
+
+	if rec.Job.Failure != nil {
+		retries = rec.Job.Failure.RetryCount
+	}
+
+	rec.Job.Failure = &job.Failure{RetryCount: retries, FailedAt: now.UTC().Format(time.RFC3339Nano), ErrType: "Killed", Message: "Killed while it ran"}
+	rec.WID = ""
+
+	return batchJobFailed(tx, &rec.Job, firstFailure, now)
 }
 
 func takeUniqueLock(tx *bolt.Tx, j *job.Job, at time.Time, scheduled bool, now time.Time) error {

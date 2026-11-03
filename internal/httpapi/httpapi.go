@@ -235,36 +235,46 @@ func (a *API) clear(w http.ResponseWriter, r *http.Request) {
 }
 
 type jobView struct {
-	JID       string          `json:"jid"`
-	JobType   string          `json:"jobtype"`
-	Queue     string          `json:"queue"`
-	Args      json.RawMessage `json:"args"`
-	State     string          `json:"state"`
-	At        *time.Time      `json:"at,omitempty"`
-	Worker    string          `json:"worker,omitempty"`
-	CreatedAt string          `json:"created_at,omitempty"`
-	Failure   *job.Failure    `json:"failure,omitempty"`
-	Custom    json.RawMessage `json:"custom,omitempty"`
-	Group     string          `json:"group"`
+	JID        string          `json:"jid"`
+	JobType    string          `json:"jobtype"`
+	Queue      string          `json:"queue"`
+	Args       json.RawMessage `json:"args"`
+	State      string          `json:"state"`
+	At         *time.Time      `json:"at,omitempty"`
+	Worker     string          `json:"worker,omitempty"`
+	CreatedAt  string          `json:"created_at,omitempty"`
+	EnqueuedAt string          `json:"enqueued_at,omitempty"`
+	StartedAt  *time.Time      `json:"started_at,omitempty"`
+	Failure    *job.Failure    `json:"failure,omitempty"`
+	Custom     json.RawMessage `json:"custom,omitempty"`
+	Group      string          `json:"group"`
 }
 
 func viewOf(entry storage.JobEntry) jobView {
 	view := jobView{
-		JID:       entry.Job.JID,
-		JobType:   entry.Job.Type,
-		Queue:     entry.Job.Queue,
-		Args:      entry.Job.Args,
-		State:     entry.State,
-		Worker:    entry.WID,
-		CreatedAt: entry.Job.CreatedAt,
-		Failure:   entry.Job.Failure,
-		Custom:    entry.Job.Custom,
-		Group:     storage.Fingerprint(&entry.Job),
+		JID:        entry.Job.JID,
+		JobType:    entry.Job.Type,
+		Queue:      entry.Job.Queue,
+		Args:       entry.Job.Args,
+		State:      entry.State,
+		Worker:     entry.WID,
+		CreatedAt:  entry.Job.CreatedAt,
+		EnqueuedAt: entry.Job.EnqueuedAt,
+		Failure:    entry.Job.Failure,
+		Custom:     entry.Job.Custom,
+		Group:      storage.Fingerprint(&entry.Job),
 	}
 
 	if !entry.At.IsZero() {
 		at := entry.At
 		view.At = &at
+	}
+
+	// A working job keeps its reservation expiry, which is the fetch time plus
+	// reserve_for, and the reservation never changes.
+	if entry.State == "working" && view.At != nil {
+		started := entry.At.Add(-time.Duration(entry.Job.ReserveFor) * time.Second)
+		view.StartedAt = &started
 	}
 
 	return view
@@ -278,7 +288,9 @@ func (a *API) jobs(w http.ResponseWriter, r *http.Request) {
 		limit = defaultPage
 	}
 
-	page, err := a.manager.ListJobs(query.Get("set"), query.Get("cursor"), limit)
+	filter := storage.JobFilter{Queue: query.Get("queue"), JobType: query.Get("jobtype"), Worker: query.Get("worker")}
+
+	page, err := a.manager.ListJobs(query.Get("set"), query.Get("cursor"), limit, filter)
 	if err != nil {
 		a.fail(w, err)
 
@@ -317,10 +329,15 @@ type actionRequest struct {
 	JIDs   []string `json:"jids"`
 	Group  string   `json:"group"`
 	All    bool     `json:"all"`
+
+	Queue   string `json:"queue"`
+	JobType string `json:"jobtype"`
+	Worker  string `json:"worker"`
 }
 
 // actions changes jobs in one set. A request names jids, a group, or all, so
-// that an empty body never changes every job.
+// that an empty body never changes every job. The optional filters limit the
+// change, the same as in the job list. Running jobs accept only kill.
 func (a *API) actions(w http.ResponseWriter, r *http.Request) {
 	var request actionRequest
 
@@ -342,8 +359,14 @@ func (a *API) actions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if !slices.Contains([]string{"retries", "scheduled", "dead"}, request.Set) {
-		writeError(w, http.StatusBadRequest, "set must be retries, scheduled, or dead")
+	if !slices.Contains([]string{"retries", "scheduled", "dead", "working"}, request.Set) {
+		writeError(w, http.StatusBadRequest, "set must be retries, scheduled, dead, or working")
+
+		return
+	}
+
+	if request.Set == "working" && command != "kill" {
+		writeError(w, http.StatusBadRequest, "running jobs accept only kill")
 
 		return
 	}
@@ -366,7 +389,9 @@ func (a *API) actions(w http.ResponseWriter, r *http.Request) {
 		return slices.Contains(request.JIDs, j.JID)
 	}
 
-	changed, err := a.manager.Apply(storage.Mutation{Command: command, Target: request.Set, Match: match})
+	filter := storage.JobFilter{Queue: request.Queue, JobType: request.JobType, Worker: request.Worker}
+
+	changed, err := a.manager.Apply(storage.Mutation{Command: command, Target: request.Set, Match: match, Filter: filter})
 	if err != nil {
 		a.fail(w, err)
 

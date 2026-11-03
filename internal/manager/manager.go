@@ -182,8 +182,8 @@ func (m *Manager) QueueDetails() ([]storage.QueueInfo, error) {
 	return m.store.QueueDetails()
 }
 
-func (m *Manager) ListJobs(set, cursor string, limit int) (storage.JobPage, error) {
-	return m.store.ListJobs(set, cursor, limit)
+func (m *Manager) ListJobs(set, cursor string, limit int, filter storage.JobFilter) (storage.JobPage, error) {
+	return m.store.ListJobs(set, cursor, limit, filter)
 }
 
 func (m *Manager) JobGroups(set string, maxScan int) (storage.JobGroups, error) {

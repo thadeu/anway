@@ -21,6 +21,7 @@ import (
 const (
 	clearPage   = 500
 	maxJobsPage = 200
+	maxPageScan = 5000
 )
 
 // QueueInfo is one queue for the web API.
@@ -42,6 +43,30 @@ type JobEntry struct {
 type JobPage struct {
 	Jobs []JobEntry
 	Next string
+}
+
+// JobFilter selects jobs in a page. An empty field matches all jobs. JobType
+// matches a part of the job type.
+type JobFilter struct {
+	Queue   string
+	JobType string
+	Worker  string
+}
+
+func (f JobFilter) match(entry *JobEntry) bool {
+	return f.matchJob(&entry.Job, entry.WID)
+}
+
+func (f JobFilter) matchJob(j *job.Job, wid string) bool {
+	if f.Queue != "" && j.Queue != f.Queue {
+		return false
+	}
+
+	if f.Worker != "" && wid != f.Worker {
+		return false
+	}
+
+	return strings.Contains(j.Type, f.JobType)
 }
 
 type JobGroup struct {
@@ -154,12 +179,18 @@ func setBucket(tx *bolt.Tx, set string) (*bolt.Bucket, bool, error) {
 	}
 }
 
-// ListJobs reads one page in one short transaction. The cursor is opaque.
-func (b *Bolt) ListJobs(set, cursor string, limit int) (JobPage, error) {
+// ListJobs reads one page in one short transaction. The cursor is opaque. With
+// a filter, one page reads at most maxPageScan keys, so a page can hold fewer
+// jobs than the limit, or none, and still have a next cursor.
+func (b *Bolt) ListJobs(set, cursor string, limit int, filter JobFilter) (JobPage, error) {
 	page := JobPage{}
 
 	if limit <= 0 || limit > maxJobsPage {
 		limit = maxJobsPage
+	}
+
+	if set == "waiting" {
+		return b.listWaiting(cursor, limit, filter)
 	}
 
 	after, err := base64.RawURLEncoding.DecodeString(cursor)
@@ -173,16 +204,23 @@ func (b *Bolt) ListJobs(set, cursor string, limit int) (JobPage, error) {
 			return err
 		}
 
-		keys := pageKeysLimit(bucket.Cursor(), after, limit+1)
+		reader := bucket.Cursor()
+		scanned := 0
 
-		if len(keys) > limit {
-			keys = keys[:limit]
-			page.Next = base64.RawURLEncoding.EncodeToString(keys[limit-1])
-		}
+		var last []byte
 
-		for _, key := range keys {
+		for key := seekAfter(reader, after); key != nil; key, _ = reader.Next() {
+			if len(page.Jobs) == limit || scanned == maxPageScan {
+				page.Next = base64.RawURLEncoding.EncodeToString(last)
+
+				break
+			}
+
+			scanned++
+			last = key
+
 			entry, ok := readEntry(tx, bucket, key, timed)
-			if ok {
+			if ok && filter.match(&entry) {
 				page.Jobs = append(page.Jobs, entry)
 			}
 		}
@@ -193,22 +231,121 @@ func (b *Bolt) ListJobs(set, cursor string, limit int) (JobPage, error) {
 	return page, err
 }
 
-func pageKeysLimit(cursor *bolt.Cursor, after []byte, limit int) [][]byte {
-	var key []byte
+type waitingHead struct {
+	name   string
+	bucket *bolt.Bucket
+	cursor *bolt.Cursor
+	key    []byte
+	entry  JobEntry
+	at     time.Time
+}
 
-	if len(after) == 0 {
-		key, _ = cursor.First()
-	} else {
-		key, _ = cursor.Seek(after)
+// read loads the job at the head key. It skips keys whose job is missing.
+func (h *waitingHead) read(tx *bolt.Tx) {
+	for ; h.key != nil; h.key, _ = h.cursor.Next() {
+		entry, ok := readEntry(tx, h.bucket, h.key, false)
+		if !ok {
+			continue
+		}
 
-		if bytes.Equal(key, after) {
-			key, _ = cursor.Next()
+		h.entry = entry
+		h.at, _ = time.Parse(time.RFC3339Nano, entry.Job.EnqueuedAt)
+
+		return
+	}
+}
+
+// listWaiting reads the waiting jobs of all queues in one transaction, oldest
+// first. It merges the queues by enqueue time. The cursor holds the last key of
+// each queue that the earlier pages read.
+func (b *Bolt) listWaiting(cursor string, limit int, filter JobFilter) (JobPage, error) {
+	page := JobPage{}
+	positions := map[string][]byte{}
+
+	if cursor != "" {
+		raw, err := base64.RawURLEncoding.DecodeString(cursor)
+		if err != nil || json.Unmarshal(raw, &positions) != nil {
+			return page, &RejectedError{Message: "invalid cursor"}
 		}
 	}
 
+	err := b.db.View(func(tx *bolt.Tx) error {
+		var heads []*waitingHead
+
+		tx.Bucket(bucketQueues).ForEachBucket(func(name []byte) error {
+			bucket := tx.Bucket(bucketQueues).Bucket(name)
+			head := &waitingHead{name: string(name), bucket: bucket, cursor: bucket.Cursor()}
+			head.key = seekAfter(head.cursor, positions[head.name])
+			head.read(tx)
+
+			if head.key != nil {
+				heads = append(heads, head)
+			}
+
+			return nil
+		})
+
+		for scanned := 0; len(heads) > 0; scanned++ {
+			if len(page.Jobs) == limit || scanned == maxPageScan {
+				raw, err := json.Marshal(positions)
+				if err != nil {
+					return err
+				}
+
+				page.Next = base64.RawURLEncoding.EncodeToString(raw)
+
+				return nil
+			}
+
+			oldest := 0
+
+			for index, head := range heads[1:] {
+				if head.at.Before(heads[oldest].at) {
+					oldest = index + 1
+				}
+			}
+
+			head := heads[oldest]
+			positions[head.name] = bytes.Clone(head.key)
+
+			if filter.match(&head.entry) {
+				page.Jobs = append(page.Jobs, head.entry)
+			}
+
+			head.key, _ = head.cursor.Next()
+			head.read(tx)
+
+			if head.key == nil {
+				heads = append(heads[:oldest], heads[oldest+1:]...)
+			}
+		}
+
+		return nil
+	})
+
+	return page, err
+}
+
+func seekAfter(cursor *bolt.Cursor, after []byte) []byte {
+	if len(after) == 0 {
+		key, _ := cursor.First()
+
+		return key
+	}
+
+	key, _ := cursor.Seek(after)
+
+	if bytes.Equal(key, after) {
+		key, _ = cursor.Next()
+	}
+
+	return key
+}
+
+func pageKeysLimit(cursor *bolt.Cursor, after []byte, limit int) [][]byte {
 	var keys [][]byte
 
-	for ; key != nil && len(keys) < limit; key, _ = cursor.Next() {
+	for key := seekAfter(cursor, after); key != nil && len(keys) < limit; key, _ = cursor.Next() {
 		keys = append(keys, bytes.Clone(key))
 	}
 
@@ -243,7 +380,7 @@ func (b *Bolt) JobGroups(set string, maxScan int) (JobGroups, error) {
 	cursor := ""
 
 	for result.Scanned < maxScan {
-		page, err := b.ListJobs(set, cursor, maxJobsPage)
+		page, err := b.ListJobs(set, cursor, maxJobsPage, JobFilter{})
 		if err != nil {
 			return result, err
 		}

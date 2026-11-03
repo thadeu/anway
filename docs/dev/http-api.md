@@ -21,7 +21,7 @@ Do not give the token to a browser. A proxy, such as the web UI image or the Rai
 | POST | `/api/v1/queues/{name}/pause` | Pause |
 | POST | `/api/v1/queues/{name}/resume` | Resume |
 | DELETE | `/api/v1/queues/{name}/jobs` | Delete the waiting jobs. The paused state stays. |
-| GET | `/api/v1/jobs?set=&limit=&cursor=` | One page of jobs |
+| GET | `/api/v1/jobs?set=&limit=&cursor=&queue=&jobtype=&worker=` | One page of jobs |
 | GET | `/api/v1/jobs/groups?set=` | Jobs grouped by cause |
 | POST | `/api/v1/jobs/actions` | Requeue, kill, or discard jobs |
 | POST | `/api/v1/jobs` | Enqueue a job. The body is a job payload. |
@@ -33,9 +33,19 @@ Errors are `{"error":"..."}` with status 400, 401, 409, or 500. A unique lock co
 
 ## Jobs
 
-`set` is `retries`, `scheduled`, `dead`, `working`, or `queue:<name>`. `limit` is 1 to 200, and the default is 50. `next_cursor` is blank on the last page. Each page is one short read transaction.
+`set` is `retries`, `scheduled`, `dead`, `working`, `waiting`, or `queue:<name>`. `working` holds the running jobs. `waiting` holds the waiting jobs of all queues, oldest first by enqueue time. `queue:<name>` holds the waiting jobs of one queue, in queue order. `limit` is 1 to 200, and the default is 50. `next_cursor` is blank on the last page. Each page is one short read transaction.
 
-Each job has `group`, the same value that `/jobs/groups` returns.
+Filters are optional, and an empty filter matches all jobs:
+
+| Filter | Matches |
+|---|---|
+| `queue` | The queue name, exactly |
+| `jobtype` | A part of the job type |
+| `worker` | The worker id that runs the job, exactly |
+
+With a filter, one page reads at most 5,000 jobs. So a page can have fewer jobs than `limit`, or none, and still have a `next_cursor`. Read pages until `next_cursor` is blank.
+
+Each job has `group`, the same value that `/jobs/groups` returns. A waiting job has `enqueued_at`. A running job has `worker` and `started_at`, and `at` is the end of its reservation.
 
 ## Groups
 
@@ -47,9 +57,16 @@ A group is the job type plus the error type and message, with numbers and long h
 {"action": "requeue", "set": "retries", "group": "9f2ca17e04d1"}
 {"action": "kill", "set": "retries", "jids": ["a", "b"]}
 {"action": "discard", "set": "dead", "all": true}
+{"action": "kill", "set": "working", "all": true, "queue": "media"}
 ```
 
-`action` is `requeue`, `kill`, or `discard`. A request needs `jids`, `group`, or `all`, so that an empty body never changes every job. The result is `{"changed": n}`.
+`action` is `requeue`, `kill`, or `discard`. `set` is `retries`, `scheduled`, `dead`, or `working`. A request needs `jids`, `group`, or `all`, so that an empty body never changes every job. The optional filters `queue`, `jobtype`, and `worker` limit the change, the same as in the job list. The result is `{"changed": n}`.
+
+### Kill a running job
+
+`working` accepts only `kill`. The job goes to the dead set with the failure `Killed: Killed while it ran`, and its throttle lease is released. In a batch, it counts as failed.
+
+The server does not stop the worker process. The worker can still run the code to its end, but its `ACK` or `FAIL` for the job then fails with `job is not reserved`. Use kill to free a stuck reservation, or to stop a job that must not be retried. The protocol `MUTATE` command does not accept `working`.
 
 ## Metrics
 
