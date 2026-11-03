@@ -109,6 +109,8 @@ func (m *Manager) Push(j *job.Job) error {
 // Fetch returns nil when no job arrives in the wait time, and at once while
 // the server drains.
 func (m *Manager) Fetch(ctx context.Context, queues []string, wid string) (*job.Job, error) {
+	m.noteQueues(wid, queues)
+
 	timer := time.NewTimer(fetchWait)
 	defer timer.Stop()
 
@@ -501,6 +503,20 @@ func (m *Manager) State() string {
 	defer m.mu.Unlock()
 
 	return m.state
+}
+
+// noteQueues keeps the queues that a worker fetches from, when its HELLO had
+// none. A client that does not send queues in HELLO, such as a Faktory
+// client, then still shows its queues, and the topics view can find it.
+func (m *Manager) noteQueues(wid string, queues []string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	current := m.workers[wid]
+
+	if current != nil && len(current.Queues) == 0 {
+		current.Queues = append([]string(nil), queues...)
+	}
 }
 
 // connectedThreads is the sum of threads of the workers that have a

@@ -67,6 +67,16 @@ The reply has `"jobs": 0`. A requeue of this job, with `MUTATE` or the web UI, p
 - Copies in different queues have no order between them. A queue keeps its own order.
 - There are no filters. Each subscriber gets every event of the topic, and skips the ones it does not need in its own code.
 
+## HTTP API and web UI
+
+`GET /api/v1/topics` lists each topic, by name, with its subscriptions. Each subscription has its queue, job type, `retry`, `reserve_for`, `created_at`, and `workers`: the connected workers that fetch from its queue, with `wid`, `hostname`, `pid`, `tag`, and `labels`.
+
+The server knows the queues of a worker from its HELLO, or from its first `FETCH` when HELLO has no queues. So a Faktory client also shows.
+
+A subscription with no worker still gets its copies, but they wait in its queue until a worker fetches from it. The web UI marks such a subscription.
+
+The web UI Topics page shows this list. It has no counts of its own, because each copy is a job: the Jobs and Queues pages count them.
+
 ## Client requirements
 
 A client library implements topics as part of the protocol:

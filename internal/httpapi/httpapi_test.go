@@ -2,6 +2,7 @@ package httpapi_test
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -663,6 +664,60 @@ func TestScaleWorkerSetsThreadsAndAutoscale(t *testing.T) {
 
 	if worker["autoscale"] != nil {
 		t.Fatalf("false must turn autoscale off: %+v", worker)
+	}
+}
+
+func TestTopicsListSubscriptionsAndTheirWorkers(t *testing.T) {
+	f := start(t)
+
+	for _, subscription := range []manager.SubscribeRequest{
+		{Topic: "chat.message", Queue: "push", JobType: "chat.notify"},
+		{Topic: "chat.message", Queue: "realtime", JobType: "chat.broadcast"},
+		{Topic: "audit", Queue: "lonely", JobType: "audit.log"},
+	} {
+		if err := f.manager.Subscribe(subscription); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	f.manager.Register(manager.WorkerInfo{WID: "ruby", Hostname: "mac", PID: 7, Tag: "shop", Queues: []string{"push"}})
+	f.manager.Register(manager.WorkerInfo{WID: "go", Hostname: "box", PID: 9})
+
+	ctx, cancel := context.WithTimeout(t.Context(), 20*time.Millisecond)
+	defer cancel()
+
+	f.manager.Fetch(ctx, []string{"realtime"}, "go")
+
+	var listed struct {
+		Topics []struct {
+			Name          string `json:"name"`
+			Subscriptions []struct {
+				Queue   string           `json:"queue"`
+				JobType string           `json:"jobtype"`
+				Workers []map[string]any `json:"workers"`
+			} `json:"subscriptions"`
+		} `json:"topics"`
+	}
+
+	f.call("GET", "/api/v1/topics", nil, &listed)
+
+	if len(listed.Topics) != 2 || listed.Topics[0].Name != "audit" || listed.Topics[1].Name != "chat.message" {
+		t.Fatalf("topics must be listed by name: %+v", listed)
+	}
+
+	audit := listed.Topics[0].Subscriptions
+	chat := listed.Topics[1].Subscriptions
+
+	if len(audit) != 1 || len(audit[0].Workers) != 0 {
+		t.Fatalf("a subscription that no worker fetches from must have no workers: %+v", audit)
+	}
+
+	if len(chat) != 2 || chat[0].Queue != "push" || len(chat[0].Workers) != 1 || chat[0].Workers[0]["tag"] != "shop" {
+		t.Fatalf("a worker with the queue in HELLO must show: %+v", chat)
+	}
+
+	if chat[1].Queue != "realtime" || len(chat[1].Workers) != 1 || chat[1].Workers[0]["hostname"] != "box" {
+		t.Fatalf("a worker that fetches from the queue must show, also without queues in HELLO: %+v", chat)
 	}
 }
 

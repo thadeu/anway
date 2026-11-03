@@ -27,6 +27,7 @@ Do not give the token to a browser. A proxy, such as the web UI image or the Rai
 | POST | `/api/v1/jobs` | Enqueue a job. The body is a job payload. |
 | GET | `/api/v1/workers` | Worker processes: hostname, pid, tag, queues, threads, busy count, start time, last beat |
 | PATCH | `/api/v1/workers/{wid}` | Change the threads of a worker, or its autoscale. See [Workers](#workers). |
+| GET | `/api/v1/topics` | Topics, their subscriptions, and the connected workers that fetch from each subscription queue. See [topics.md](topics.md#http-api-and-web-ui). |
 | GET | `/api/v1/schedules` | Cron entries with the next run, and throttles in use |
 | GET | `/api/v1/batches` | Batches, up to 200 |
 

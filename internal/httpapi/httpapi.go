@@ -68,6 +68,7 @@ func (a *API) routes() http.Handler {
 	mux.HandleFunc("GET /api/v1/workers", a.workers)
 	mux.HandleFunc("PATCH /api/v1/workers/{wid}", a.scaleWorker)
 	mux.HandleFunc("GET /api/v1/schedules", a.schedules)
+	mux.HandleFunc("GET /api/v1/topics", a.topics)
 	mux.HandleFunc("GET /api/v1/batches", a.batches)
 
 	return mux
