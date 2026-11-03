@@ -1,3 +1,10 @@
+<p>
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="brand/png/lockup-on-dark.png">
+    <img src="brand/png/lockup-on-light.png" alt="Anway" width="320">
+  </picture>
+</p>
+
 # Anway
 
 A [Clowk](https://clowk.in) product, planned at `anway.clowk.in`. A language-agnostic background job server. It is one binary with embedded disk storage, and it does not need Redis.
