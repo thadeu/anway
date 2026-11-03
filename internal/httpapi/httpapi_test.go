@@ -588,8 +588,15 @@ func TestWorkersShowConcurrencyAndBusy(t *testing.T) {
 
 	f.call("GET", "/api/v1/overview", nil, &overview)
 
-	if overview.Threads["busy"] != 1 || overview.Threads["total"] != 200 {
+	if overview.Threads["busy"] != 1 || overview.Threads["total"] != 200 || overview.Threads["max"] != 200 {
 		t.Fatalf("unexpected threads: %+v", overview.Threads)
+	}
+
+	f.manager.Register(manager.WorkerInfo{WID: "w2", Hostname: "mta-2", Concurrency: 5, Autoscale: &manager.Autoscale{Max: 30}})
+	f.call("GET", "/api/v1/overview", nil, &overview)
+
+	if overview.Threads["total"] != 205 || overview.Threads["max"] != 230 {
+		t.Fatalf("max must add the autoscale max of a worker, not its count: %+v", overview.Threads)
 	}
 }
 

@@ -15,7 +15,7 @@ Do not give the token to a browser. A proxy, such as the web UI image or the Rai
 | Method | Path | Result |
 |---|---|---|
 | GET | `/healthz` | `{"status":"ok"}` |
-| GET | `/api/v1/overview` | Server, job states, totals, threads, live rate per second, workers, queues, paused queues |
+| GET | `/api/v1/overview` | Server, job states, totals, threads (`busy`, `total`, and `max`: the autoscale max of each worker, or its count when autoscale is off), live rate per second, workers, queues, paused queues |
 | GET | `/api/v1/metrics?range=` or `?from=&until=` | Done and failed jobs, and the peak of worker threads. See Metrics. |
 | GET | `/api/v1/queues` | Size, paused, oldest job age, jobs per minute, time to clear |
 | POST | `/api/v1/queues/{name}/pause` | Pause |

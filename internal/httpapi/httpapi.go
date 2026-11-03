@@ -109,11 +109,18 @@ func (a *API) overview(w http.ResponseWriter, _ *http.Request) {
 		waiting += size
 	}
 
-	threads := 0
+	// total is the threads that the workers run now. most is how far they can
+	// go: the autoscale max of each worker, or its count when autoscale is off.
+	threads, most := 0, 0
 	workers := a.manager.Workers()
 
 	for _, worker := range workers {
 		threads += worker.Concurrency
+		most += worker.Concurrency
+
+		if worker.Autoscale != nil {
+			most += max(worker.Autoscale.Max-worker.Concurrency, 0)
+		}
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{
@@ -134,7 +141,7 @@ func (a *API) overview(w http.ResponseWriter, _ *http.Request) {
 			"failures":  stats.Failures,
 			"expired":   stats.Expired,
 		},
-		"threads": map[string]any{"busy": stats.Working, "total": threads},
+		"threads": map[string]any{"busy": stats.Working, "total": threads, "max": most},
 		"rate":    a.liveRate(),
 		"workers": len(workers),
 		"queues":  len(stats.Queues),
