@@ -35,6 +35,8 @@ Configure the server with env vars or flags. See [docs/dev/configuration.md](doc
 - `MUTATE` for retries, scheduled jobs, and the dead set.
 - Cron, unique jobs, expiring jobs, and queue throttling.
 - Batches with callbacks and child batches, and job tracking.
+- A death hook that pushes a notice job when a job dies.
+- An HTTP API for the web UI.
 
 There is no web UI yet.
 
@@ -54,6 +56,7 @@ There is no web UI yet.
 - [docs/dev/job-lifecycle.md](docs/dev/job-lifecycle.md): Job states and retries.
 - [docs/dev/storage.md](docs/dev/storage.md): Storage design.
 - [docs/dev/batches.md](docs/dev/batches.md): Batches and job tracking.
+- [docs/dev/http-api.md](docs/dev/http-api.md): HTTP API for the web UI.
 - [docs/dev/configuration.md](docs/dev/configuration.md): Configuration.
 - [docs/dev/docker.md](docs/dev/docker.md): Docker image.
 - [docs/dev/tls.md](docs/dev/tls.md): TLS with Let's Encrypt or Caddy.

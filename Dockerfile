@@ -24,6 +24,6 @@ COPY --from=build /out/anway /usr/local/bin/anway
 COPY --from=build --chown=65532:65532 /out/data /data
 
 VOLUME /data
-EXPOSE 7419
+EXPOSE 7419 7420
 
 ENTRYPOINT ["/usr/local/bin/anway"]

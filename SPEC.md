@@ -49,7 +49,7 @@ These numbers are initial targets, not measurements.
 
 | Phase | Scope |
 |---|---|
-| 2 | Web UI and metrics. Done: cron, queue pause, `MUTATE`, `INFO` format |
+| 2 | Web UI. Done: HTTP API, metrics in memory, death hook, cron, queue pause, `MUTATE`, `INFO` format |
 | 3 | Done: unique jobs, expiring jobs, throttling, batches, job tracking |
 | 4 | Replication and high availability |
 | 5 | SaaS: tenants, quotas, authentication with clowk, billing with contagorda-pay |

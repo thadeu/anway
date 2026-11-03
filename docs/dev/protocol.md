@@ -13,7 +13,7 @@ The protocol follows the [public Faktory work protocol](https://github.com/contr
 
 1. The server sends `HI` with JSON: `v`, and also `i` and `s` if a password is set.
 2. The client sends `HELLO` with JSON: `v`, and `pwdhash` if necessary.
-3. A worker also sends `hostname`, `wid`, `pid`, and `labels`.
+3. A worker also sends `hostname`, `wid`, `pid`, and `labels`. It can also send `concurrency`, the number of jobs it runs at once. This field is an Anway extension, and the web UI shows it as threads.
 4. The server replies `OK`.
 
 `pwdhash` is the hex result of SHA-256 on the password plus the salt, applied `i` times.
@@ -26,7 +26,7 @@ The protocol follows the [public Faktory work protocol](https://github.com/contr
 | `FETCH` | Queue names | Job JSON, or null after a maximum of 2 seconds |
 | `ACK` | `{"jid"}` | `OK` |
 | `FAIL` | `{"jid","errtype","message","backtrace"}` | `OK` |
-| `BEAT` | `{"wid","current_state","rss_kb"}` | `OK`, or `{"state":"quiet"}`, or `{"state":"terminate"}` |
+| `BEAT` | `{"wid","current_state","rss_kb"}`. The web UI shows `current_state`. | `OK`, or `{"state":"quiet"}`, or `{"state":"terminate"}` |
 | `INFO` | None | Server data as JSON, with the `server` and `faktory` hashes |
 | `QUEUE` | `PAUSE`, `RESUME`, or `REMOVE`, then queue names or `*` | `OK` |
 | `MUTATE` | `{"cmd","target","filter"}` | `OK` |
@@ -72,6 +72,7 @@ A `PUSH` that a unique lock blocks returns `-NOTUNIQUE Job not unique`.
 | `expires_in` | Seconds. The server converts it to `expires_at` at push. |
 | `unique_for` | Seconds. Blocks jobs with the same type, queue, and args. |
 | `unique_until` | `success` (default) or `start`. Tells when the lock is released. |
+| `on_dead` | `{"jobtype","queue"}`. When the job dies, the server pushes this job. See [job-lifecycle.md](job-lifecycle.md). |
 | `bid` | Adds the job to an open batch. |
 | `track` | `1` enables tracking. |
 | `_bid`, `_cb` | Set by the server on callback jobs. |

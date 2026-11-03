@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -17,6 +18,7 @@ import (
 
 	"github.com/thadeu/anway/internal/config"
 	"github.com/thadeu/anway/internal/cron"
+	"github.com/thadeu/anway/internal/httpapi"
 	"github.com/thadeu/anway/internal/manager"
 	"github.com/thadeu/anway/internal/server"
 	"github.com/thadeu/anway/internal/storage"
@@ -151,6 +153,10 @@ func run() error {
 	}
 
 	jobs := manager.New(store)
+
+	if err := jobs.RestoreMetrics(cfg.MetricsRetention); err != nil {
+		return err
+	}
 	srv := server.New(jobs, server.Options{Password: cfg.Password, AllowFlush: cfg.AllowFlush}, log)
 	loopCtx, stopLoop := context.WithCancel(context.Background())
 
@@ -177,6 +183,11 @@ func run() error {
 		})
 	})
 
+	web, err := startWeb(cfg, jobs, srv, scheduler, log)
+	if err != nil {
+		return err
+	}
+
 	serveErr := make(chan error, 1)
 
 	go func() {
@@ -196,5 +207,51 @@ func run() error {
 	listener.Close()
 	srv.Shutdown(cfg.ShutdownTimeout)
 
+	if err := jobs.SaveMetrics(); err != nil {
+		log.Error("metrics save failed", "error", err)
+	}
+
+	if web != nil {
+		webCtx, cancel := context.WithTimeout(context.Background(), webShutdown)
+		defer cancel()
+
+		web.Shutdown(webCtx)
+	}
+
 	return nil
+}
+
+const webShutdown = 5 * time.Second
+
+// startWeb serves the web API when WEB_ADDR is set. It returns nil when it is off.
+func startWeb(cfg config.Config, jobs *manager.Manager, srv *server.Server, scheduler *cron.Scheduler, log *slog.Logger) (*http.Server, error) {
+	if cfg.WebAddr == "" {
+		return nil, nil
+	}
+
+	listener, err := net.Listen("tcp", cfg.WebAddr)
+	if err != nil {
+		return nil, err
+	}
+
+	handler := httpapi.Handler(jobs, httpapi.Options{
+		Token:       cfg.WebToken,
+		Version:     config.Version,
+		Started:     time.Now(),
+		Connections: srv.Connections,
+		Scheduler:   scheduler,
+		Logger:      log,
+	})
+
+	web := &http.Server{Handler: handler, ReadHeaderTimeout: 10 * time.Second}
+
+	go func() {
+		if err := web.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			log.Error("web API stopped", "error", err)
+		}
+	}()
+
+	log.Info("web API started", "addr", listener.Addr().String())
+
+	return web, nil
 }

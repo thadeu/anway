@@ -120,6 +120,11 @@ func (s *Server) waitForConnections(timeout time.Duration) {
 	}
 }
 
+// Connections returns the number of open client connections.
+func (s *Server) Connections() int {
+	return s.connectionCount()
+}
+
 func (s *Server) connectionCount() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -149,10 +154,13 @@ type session struct {
 }
 
 type hello struct {
-	Version  int    `json:"v"`
-	PwdHash  string `json:"pwdhash"`
-	Hostname string `json:"hostname"`
-	WID      string `json:"wid"`
+	Version     int      `json:"v"`
+	PwdHash     string   `json:"pwdhash"`
+	Hostname    string   `json:"hostname"`
+	WID         string   `json:"wid"`
+	PID         int      `json:"pid"`
+	Labels      []string `json:"labels"`
+	Concurrency int      `json:"concurrency"`
 }
 
 func (s *Server) handle(ctx context.Context, conn net.Conn) {
@@ -164,6 +172,10 @@ func (s *Server) handle(ctx context.Context, conn net.Conn) {
 		s.log.Debug("handshake failed", "error", err)
 
 		return
+	}
+
+	if current.wid != "" {
+		defer s.manager.Disconnect(current.wid)
 	}
 
 	for {
@@ -238,7 +250,13 @@ func (s *Server) handshake(current *session) error {
 	current.wid = request.WID
 
 	if current.wid != "" {
-		s.manager.Beat(current.wid)
+		s.manager.Register(manager.WorkerInfo{
+			WID:         request.WID,
+			Hostname:    request.Hostname,
+			PID:         request.PID,
+			Labels:      request.Labels,
+			Concurrency: request.Concurrency,
+		})
 	}
 
 	return protocol.WriteSimple(current.conn, "OK")
@@ -551,7 +569,8 @@ func (s *Server) fail(conn net.Conn, args []byte) error {
 
 func (s *Server) beat(current *session, args []byte) error {
 	var request struct {
-		WID string `json:"wid"`
+		WID          string `json:"wid"`
+		CurrentState string `json:"current_state"`
 	}
 
 	if err := json.Unmarshal(args, &request); err != nil {
@@ -562,7 +581,7 @@ func (s *Server) beat(current *session, args []byte) error {
 		return errors.New("BEAT wid does not match this connection")
 	}
 
-	state := s.manager.Beat(request.WID)
+	state := s.manager.Beat(request.WID, request.CurrentState)
 	if state == manager.StateRunning {
 		return protocol.WriteSimple(current.conn, "OK")
 	}

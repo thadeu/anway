@@ -39,3 +39,18 @@ The `failure` field records the retry count, the failure time, the next retry ti
 1. The server sends `quiet` in the `BEAT` reply. The worker stops fetching.
 2. The server sends `terminate`. The worker fails its running jobs within 30 seconds, then ends.
 3. Jobs that do not receive `ACK` or `FAIL` return through the reservation timeout.
+
+## Death hook
+
+A job with `custom.on_dead` names a job that the server pushes when the job dies:
+
+```json
+{"jobtype": "mail.deliver", "args": [42], "retry": 15,
+ "custom": {"on_dead": {"jobtype": "mail.bounced", "queue": "rails"}}}
+```
+
+- The notice goes to its queue in the same transaction as the death, so a crash cannot lose it.
+- Its one arg is a hash with `jid`, `jobtype`, `queue`, `args`, `failure`, and `custom` of the dead job.
+- It fires when the retries end, at `retry: -1`, and when the last reservation expires.
+- It does not fire for a manual kill with `MUTATE`, or for a discard.
+- The notice is a normal job with the default retries. It has no hook of its own.

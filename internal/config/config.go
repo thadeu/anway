@@ -9,6 +9,8 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"time"
 )
 
@@ -18,17 +20,20 @@ const ProductName = "anway"
 var Version = "dev"
 
 type Config struct {
-	BindAddr        string
-	DataDir         string
-	ConfDir         string
-	Password        string
-	AllowFlush      bool
-	TLSCertFile     string
-	TLSKeyFile      string
-	BackupDir       string
-	ShutdownTimeout time.Duration
-	LogLevel        slog.Level
-	ShowVersion     bool
+	BindAddr         string
+	DataDir          string
+	ConfDir          string
+	Password         string
+	AllowFlush       bool
+	TLSCertFile      string
+	TLSKeyFile       string
+	BackupDir        string
+	WebAddr          string
+	WebToken         string
+	MetricsRetention time.Duration
+	ShutdownTimeout  time.Duration
+	LogLevel         slog.Level
+	ShowVersion      bool
 }
 
 // Load reads env vars, then applies flags, which have priority.
@@ -41,6 +46,8 @@ func Load(args []string) (Config, error) {
 		AllowFlush:      os.Getenv("ALLOW_FLUSH") == "true",
 		TLSCertFile:     os.Getenv("TLS_CERT_FILE"),
 		TLSKeyFile:      os.Getenv("TLS_KEY_FILE"),
+		WebAddr:         os.Getenv("WEB_ADDR"),
+		WebToken:        os.Getenv("WEB_TOKEN"),
 		ShutdownTimeout: 30 * time.Second,
 	}
 
@@ -53,6 +60,13 @@ func Load(args []string) (Config, error) {
 		cfg.ShutdownTimeout = timeout
 	}
 
+	retention, err := parseRetention(env("METRICS_RETENTION", "24h"))
+	if err != nil {
+		return Config{}, err
+	}
+
+	cfg.MetricsRetention = retention
+
 	if err := cfg.LogLevel.UnmarshalText([]byte(env("LOG_LEVEL", "info"))); err != nil {
 		return Config{}, fmt.Errorf("invalid LOG_LEVEL: %w", err)
 	}
@@ -64,6 +78,7 @@ func Load(args []string) (Config, error) {
 	flags.StringVar(&cfg.ConfDir, "conf-dir", cfg.ConfDir, "YAML settings directory")
 	flags.StringVar(&cfg.TLSCertFile, "tls-cert", cfg.TLSCertFile, "TLS certificate file")
 	flags.StringVar(&cfg.TLSKeyFile, "tls-key", cfg.TLSKeyFile, "TLS private key file")
+	flags.StringVar(&cfg.WebAddr, "web", cfg.WebAddr, "web API address, off when blank")
 	flags.BoolVar(&cfg.ShowVersion, "version", false, "print the version")
 
 	if err := flags.Parse(args); err != nil {
@@ -92,7 +107,43 @@ func (c Config) validate() error {
 		return fmt.Errorf("SERVER_PASSWORD is required when BIND_ADDR is %s", c.BindAddr)
 	}
 
+	if c.WebAddr != "" && c.WebToken == "" && !isLoopback(c.WebAddr) {
+		return fmt.Errorf("WEB_TOKEN is required when WEB_ADDR is %s", c.WebAddr)
+	}
+
 	return nil
+}
+
+const (
+	minRetention = time.Hour
+	maxRetention = 60 * 24 * time.Hour
+)
+
+// parseRetention accepts Go durations and a day count such as "60d".
+func parseRetention(raw string) (time.Duration, error) {
+	var retention time.Duration
+
+	if days, isDays := strings.CutSuffix(raw, "d"); isDays {
+		count, err := strconv.Atoi(days)
+		if err != nil {
+			return 0, fmt.Errorf("invalid METRICS_RETENTION: %q", raw)
+		}
+
+		retention = time.Duration(count) * 24 * time.Hour
+	} else {
+		parsed, err := time.ParseDuration(raw)
+		if err != nil {
+			return 0, fmt.Errorf("invalid METRICS_RETENTION: %w", err)
+		}
+
+		retention = parsed
+	}
+
+	if retention < minRetention || retention > maxRetention {
+		return 0, fmt.Errorf("METRICS_RETENTION must be between 1h and 60d, not %s", raw)
+	}
+
+	return retention, nil
 }
 
 func isLoopback(addr string) bool {

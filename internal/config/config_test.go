@@ -14,6 +14,9 @@ func TestValidate(t *testing.T) {
 		{"blank host without password", Config{BindAddr: ":7419"}, false},
 		{"public with password", Config{BindAddr: "0.0.0.0:7419", Password: "x"}, true},
 		{"certificate without key", Config{BindAddr: "127.0.0.1:7419", TLSCertFile: "a"}, false},
+		{"local web without token", Config{BindAddr: "127.0.0.1:7419", WebAddr: "127.0.0.1:7420"}, true},
+		{"public web without token", Config{BindAddr: "127.0.0.1:7419", WebAddr: "0.0.0.0:7420"}, false},
+		{"public web with token", Config{BindAddr: "127.0.0.1:7419", WebAddr: "0.0.0.0:7420", WebToken: "t"}, true},
 	}
 
 	for _, current := range cases {
@@ -44,5 +47,15 @@ func TestFlagsAreValidated(t *testing.T) {
 
 	if _, err := Load([]string{"extra"}); err == nil {
 		t.Fatal("an extra argument must fail")
+	}
+}
+
+func TestParseRetention(t *testing.T) {
+	cases := map[string]bool{"24h": true, "60d": true, "1h": true, "61d": false, "30m": false, "abc": false, "xd": false}
+
+	for raw, valid := range cases {
+		if _, err := parseRetention(raw); (err == nil) != valid {
+			t.Fatalf("%s: unexpected result: %v", raw, err)
+		}
 	}
 }

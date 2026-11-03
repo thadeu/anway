@@ -120,14 +120,21 @@ func (j *Job) ScheduledAt(now time.Time) (time.Time, bool) {
 
 // options reads the custom fields that change server behavior.
 type options struct {
-	ExpiresAt   *string  `json:"expires_at"`
-	ExpiresIn   *float64 `json:"expires_in"`
-	UniqueFor   *float64 `json:"unique_for"`
-	UniqueUntil string   `json:"unique_until"`
-	BatchID     string   `json:"bid"`
-	CallbackBID string   `json:"_bid"`
-	Callback    string   `json:"_cb"`
-	Track       float64  `json:"track"`
+	ExpiresAt   *string   `json:"expires_at"`
+	ExpiresIn   *float64  `json:"expires_in"`
+	UniqueFor   *float64  `json:"unique_for"`
+	UniqueUntil string    `json:"unique_until"`
+	BatchID     string    `json:"bid"`
+	CallbackBID string    `json:"_bid"`
+	Callback    string    `json:"_cb"`
+	Track       float64   `json:"track"`
+	OnDead      *DeadHook `json:"on_dead"`
+}
+
+// DeadHook names a job that the server pushes when this job dies.
+type DeadHook struct {
+	JobType string `json:"jobtype"`
+	Queue   string `json:"queue,omitempty"`
 }
 
 func (j *Job) options() options {
@@ -160,6 +167,16 @@ func (j *Job) normalizeCustom(now time.Time) error {
 
 	if parsed.UniqueUntil != "" && parsed.UniqueUntil != "start" && parsed.UniqueUntil != "success" {
 		return fmt.Errorf("invalid unique_until: %q", parsed.UniqueUntil)
+	}
+
+	if parsed.OnDead != nil {
+		if parsed.OnDead.JobType == "" {
+			return errors.New("on_dead needs a jobtype")
+		}
+
+		if parsed.OnDead.Queue != "" && !ValidQueue(parsed.OnDead.Queue) {
+			return fmt.Errorf("invalid on_dead queue: %q", parsed.OnDead.Queue)
+		}
 	}
 
 	if parsed.ExpiresAt != nil {
@@ -236,6 +253,11 @@ func (j *Job) BatchCallback() (string, string) {
 	parsed := j.options()
 
 	return parsed.CallbackBID, parsed.Callback
+}
+
+// DeadHook returns the job to push when this job dies, or nil.
+func (j *Job) DeadHook() *DeadHook {
+	return j.options().OnDead
 }
 
 func (j *Job) Tracked() bool {

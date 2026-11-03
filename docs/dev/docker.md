@@ -17,5 +17,6 @@ docker run -d --name anway \
 - Mount YAML settings at `/etc/anway/conf.d`.
 - `docker kill -s USR1 anway` writes a backup, and `docker kill -s HUP anway` reloads settings.
 - Set the stop timeout above `SHUTDOWN_TIMEOUT`, which is 30 seconds. In Kubernetes, use `terminationGracePeriodSeconds`.
+- To serve the web UI API, set `WEB_ADDR=0.0.0.0:7420` and `WEB_TOKEN`, and publish port 7420 only on a private network.
 - Run one replica only. Two servers cannot share one data file.
 - The image has no shell. Use a TCP probe on port 7419 for health checks.

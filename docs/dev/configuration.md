@@ -11,6 +11,9 @@ Env vars do not have a product prefix, so a rename does not change deployments.
 | `ALLOW_FLUSH` | `false` | Set to `true` to enable `FLUSH`. |
 | `TLS_CERT_FILE` | Empty | TLS certificate. Set it with `TLS_KEY_FILE`. |
 | `TLS_KEY_FILE` | Empty | TLS private key. |
+| `WEB_ADDR` | Empty | HTTP API address for the web UI. Empty turns it off. |
+| `WEB_TOKEN` | Empty | HTTP API token. Required when `WEB_ADDR` is not a loopback address. |
+| `METRICS_RETENTION` | `24h` | Time that saved metrics stay. From `1h` to `60d`. Accepts Go durations and days, such as `30d`. |
 | `BACKUP_DIR` | `$DATA_DIR/backups` | Snapshot directory. |
 | `SHUTDOWN_TIMEOUT` | `30s` | Time for workers to finish |
 | `LOG_LEVEL` | `info` | Log level |
@@ -41,6 +44,7 @@ Flags have priority over env vars. The password has no flag, because a process l
 | `--conf-dir` | `CONF_DIR` |
 | `--tls-cert` | `TLS_CERT_FILE` |
 | `--tls-key` | `TLS_KEY_FILE` |
+| `--web` | `WEB_ADDR` |
 | `--version` | None |
 | `--help` | None |
 

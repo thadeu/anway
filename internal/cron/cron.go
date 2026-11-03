@@ -184,6 +184,32 @@ func (s *Scheduler) SetEntries(entries []Entry) {
 	}
 }
 
+// Upcoming is one cron entry with its next run.
+type Upcoming struct {
+	Schedule string
+	JobType  string
+	Queue    string
+	Next     time.Time
+}
+
+func (s *Scheduler) Upcoming() []Upcoming {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	upcoming := make([]Upcoming, 0, len(s.entries))
+
+	for i, entry := range s.entries {
+		queue := entry.Job.Queue
+		if queue == "" {
+			queue = job.DefaultQueue
+		}
+
+		upcoming = append(upcoming, Upcoming{Schedule: entry.Schedule, JobType: entry.Job.Type, Queue: queue, Next: s.next[i]})
+	}
+
+	return upcoming
+}
+
 func (s *Scheduler) Run(ctx context.Context) {
 	ticker := time.NewTicker(time.Second)
 	defer ticker.Stop()

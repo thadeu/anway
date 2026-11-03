@@ -48,7 +48,7 @@ var (
 	bucketBatchTTL  = []byte("batch_expiry")
 	bucketTracks    = []byte("tracks")
 	bucketTrackTTL  = []byte("track_expiry")
-	topBuckets      = [][]byte{bucketJobs, bucketQueues, bucketScheduled, bucketRetries, bucketWorking, bucketDead, bucketCounters, bucketPaused, bucketUniques, bucketUniqueTTL, bucketLeases, bucketBatches, bucketBatchTTL, bucketTracks, bucketTrackTTL}
+	topBuckets      = [][]byte{bucketJobs, bucketQueues, bucketScheduled, bucketRetries, bucketWorking, bucketDead, bucketCounters, bucketPaused, bucketUniques, bucketUniqueTTL, bucketLeases, bucketBatches, bucketBatchTTL, bucketTracks, bucketTrackTTL, bucketMetrics}
 )
 
 // record is the stored job with its current location.
@@ -56,6 +56,7 @@ type record struct {
 	Job   job.Job `json:"j"`
 	State string  `json:"s"`
 	Key   []byte  `json:"k,omitempty"`
+	WID   string  `json:"w,omitempty"`
 }
 
 // writeOp is one change. It must validate before it writes, because an
@@ -344,6 +345,7 @@ func (b *Bolt) Fetch(queues []string, wid string, now time.Time) (*job.Job, erro
 			}
 
 			expiry := now.Add(time.Duration(rec.Job.ReserveFor) * time.Second)
+			rec.WID = wid
 
 			if err := moveToSet(tx, rec, bucketWorking, expiry); err != nil {
 				return err
@@ -387,12 +389,17 @@ func (b *Bolt) anyReady(queues []string) (bool, error) {
 	return ready, err
 }
 
-func (b *Bolt) Ack(jid string) error {
-	return b.write(func(tx *bolt.Tx) error {
+// Ack returns the queue of the job, for metrics.
+func (b *Bolt) Ack(jid string) (string, error) {
+	var queue string
+
+	err := b.write(func(tx *bolt.Tx) error {
 		rec, err := reserved(tx, jid)
 		if err != nil {
 			return err
 		}
+
+		queue = rec.Job.Queue
 
 		if err := removeFromSet(tx, rec); err != nil {
 			return err
@@ -422,17 +429,26 @@ func (b *Bolt) Ack(jid string) error {
 
 		return tx.Bucket(bucketJobs).Delete([]byte(jid))
 	})
+
+	return queue, err
 }
 
-func (b *Bolt) Fail(jid string, now time.Time, decide Decide) error {
-	return b.write(func(tx *bolt.Tx) error {
+// Fail returns the queue of the job, for metrics.
+func (b *Bolt) Fail(jid string, now time.Time, decide Decide) (string, error) {
+	var queue string
+
+	err := b.write(func(tx *bolt.Tx) error {
 		rec, err := reserved(tx, jid)
 		if err != nil {
 			return err
 		}
 
+		queue = rec.Job.Queue
+
 		return settle(tx, rec, now, decide)
 	})
+
+	return queue, err
 }
 
 func (b *Bolt) MoveDue(now time.Time, limit int) (int, error) {
@@ -925,6 +941,7 @@ func enqueue(tx *bolt.Tx, rec *record, now time.Time) error {
 
 	rec.State = string(bucketQueues)
 	rec.Key = key
+	rec.WID = ""
 	rec.Job.At = ""
 	rec.Job.EnqueuedAt = now.UTC().Format(time.RFC3339Nano)
 
@@ -1025,11 +1042,17 @@ func settle(tx *bolt.Tx, rec *record, now time.Time, decide Decide) error {
 		return err
 	}
 
+	rec.WID = ""
+
 	switch disposition.Outcome {
 	case Retry:
 		return moveToSet(tx, rec, bucketRetries, disposition.At)
 	case Dead:
-		return moveToSet(tx, rec, bucketDead, now)
+		if err := moveToSet(tx, rec, bucketDead, now); err != nil {
+			return err
+		}
+
+		return fireDeadHook(tx, rec, now)
 	default:
 		return tx.Bucket(bucketJobs).Delete([]byte(rec.Job.JID))
 	}

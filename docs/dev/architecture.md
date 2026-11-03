@@ -45,6 +45,7 @@ internal/server/   TCP connections
 internal/manager/  Job state changes
 internal/storage/  Storage interface and bbolt implementation
 internal/cron/     YAML settings and periodic jobs
+internal/httpapi/  HTTP API for the web UI
 internal/config/   Configuration, and the only location of the product name
 internal/testclient/ Minimal client for tests and load tools
 cmd/loadtest/      Load tool

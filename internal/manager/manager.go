@@ -4,6 +4,7 @@ package manager
 import (
 	"context"
 	"math/rand/v2"
+	"sort"
 	"sync"
 	"time"
 
@@ -30,20 +31,39 @@ type FailReport struct {
 	Backtrace []string `json:"backtrace"`
 }
 
-type Manager struct {
-	store storage.Store
+// WorkerInfo is what the server knows about one worker process.
+type WorkerInfo struct {
+	WID         string
+	Hostname    string
+	PID         int
+	Labels      []string
+	Concurrency int
+	Connections int
+	State       string
+	LastBeat    time.Time
+}
 
-	mu      sync.Mutex
-	arrival chan struct{}
-	workers map[string]time.Time
-	state   string
+type Manager struct {
+	store   storage.Store
+	metrics *metrics
+
+	mu        sync.Mutex
+	arrival   chan struct{}
+	workers   map[string]*WorkerInfo
+	state     string
+	throttles map[string]storage.Throttle
+
+	flushMu   sync.Mutex
+	retention time.Duration
+	lastFlush int64
 }
 
 func New(store storage.Store) *Manager {
 	return &Manager{
 		store:   store,
+		metrics: newMetrics(),
 		arrival: make(chan struct{}),
-		workers: map[string]time.Time{},
+		workers: map[string]*WorkerInfo{},
 	}
 }
 
@@ -91,10 +111,12 @@ func (m *Manager) Fetch(ctx context.Context, queues []string, wid string) (*job.
 }
 
 func (m *Manager) Ack(jid string) error {
-	if err := m.store.Ack(jid); err != nil {
+	queue, err := m.store.Ack(jid)
+	if err != nil {
 		return err
 	}
 
+	m.metrics.add(queue, 1, 0, time.Now())
 	m.wake()
 
 	return nil
@@ -103,13 +125,14 @@ func (m *Manager) Ack(jid string) error {
 func (m *Manager) Fail(report FailReport) error {
 	now := time.Now()
 
-	err := m.store.Fail(report.JID, now, func(j *job.Job) storage.Disposition {
+	queue, err := m.store.Fail(report.JID, now, func(j *job.Job) storage.Disposition {
 		return decideRetry(j, report, now)
 	})
 	if err != nil {
 		return err
 	}
 
+	m.metrics.add(queue, 0, 1, now)
 	m.wake()
 
 	return nil
@@ -134,17 +157,65 @@ func (m *Manager) RemoveQueues(names []string) error {
 }
 
 func (m *Manager) Mutate(mutation storage.Mutation) error {
-	if _, err := m.store.Mutate(mutation, time.Now()); err != nil {
-		return err
+	_, err := m.Apply(mutation)
+
+	return err
+}
+
+// Apply runs a mutation and returns the number of changed jobs.
+func (m *Manager) Apply(mutation storage.Mutation) (int, error) {
+	changed, err := m.store.Mutate(mutation, time.Now())
+	if err != nil {
+		return changed, err
 	}
 
 	m.wake()
 
-	return nil
+	return changed, nil
+}
+
+func (m *Manager) ClearQueue(name string) (int, error) {
+	return m.store.ClearQueue(name)
+}
+
+func (m *Manager) QueueDetails() ([]storage.QueueInfo, error) {
+	return m.store.QueueDetails()
+}
+
+func (m *Manager) ListJobs(set, cursor string, limit int) (storage.JobPage, error) {
+	return m.store.ListJobs(set, cursor, limit)
+}
+
+func (m *Manager) JobGroups(set string, maxScan int) (storage.JobGroups, error) {
+	return m.store.JobGroups(set, maxScan)
+}
+
+func (m *Manager) BusyByWorker() (map[string]int, error) {
+	return m.store.BusyByWorker()
+}
+
+func (m *Manager) LeaseCounts() (map[string]int, error) {
+	return m.store.LeaseCounts(time.Now())
+}
+
+func (m *Manager) Batches(limit int) ([]storage.BatchSummary, error) {
+	return m.store.Batches(limit)
+}
+
+// Throttles returns the limits in use.
+func (m *Manager) Throttles() map[string]storage.Throttle {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	return m.throttles
 }
 
 // SetThrottles replaces the limits. A blank map removes all limits.
 func (m *Manager) SetThrottles(throttles map[string]storage.Throttle) {
+	m.mu.Lock()
+	m.throttles = throttles
+	m.mu.Unlock()
+
 	m.store.SetThrottles(throttles)
 	m.wake()
 }
@@ -207,6 +278,7 @@ func (m *Manager) Tick(now time.Time) error {
 		}
 
 		if expired > 0 {
+			m.metrics.add("", 0, uint64(expired), now)
 			m.wake()
 		}
 
@@ -237,6 +309,10 @@ func (m *Manager) Tick(now time.Time) error {
 		}
 	}
 
+	if err := m.tickMetrics(now); err != nil {
+		return err
+	}
+
 	m.reapWorkers(now)
 
 	return nil
@@ -258,13 +334,74 @@ func (m *Manager) Run(ctx context.Context, onError func(error)) {
 	}
 }
 
-func (m *Manager) Beat(wid string) string {
+// Register records a worker connection. A process can open many connections
+// with one worker id.
+func (m *Manager) Register(info WorkerInfo) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	m.workers[wid] = time.Now()
+	current := m.workers[info.WID]
+
+	if current == nil {
+		current = &WorkerInfo{WID: info.WID}
+		m.workers[info.WID] = current
+	}
+
+	current.Hostname = info.Hostname
+	current.PID = info.PID
+	current.Labels = info.Labels
+	current.Concurrency = info.Concurrency
+	current.Connections++
+	current.LastBeat = time.Now()
+}
+
+func (m *Manager) Disconnect(wid string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if current := m.workers[wid]; current != nil && current.Connections > 0 {
+		current.Connections--
+	}
+}
+
+// Beat records liveness and returns the state that the worker must take.
+func (m *Manager) Beat(wid, reportedState string) string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	current := m.workers[wid]
+
+	if current == nil {
+		current = &WorkerInfo{WID: wid}
+		m.workers[wid] = current
+	}
+
+	current.LastBeat = time.Now()
+	current.State = reportedState
 
 	return m.state
+}
+
+// Workers returns a copy of the worker table, sorted by host.
+func (m *Manager) Workers() []WorkerInfo {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	workers := make([]WorkerInfo, 0, len(m.workers))
+
+	for _, worker := range m.workers {
+		workers = append(workers, *worker)
+	}
+
+	sort.Slice(workers, func(i, j int) bool {
+		if workers[i].Hostname != workers[j].Hostname {
+			return workers[i].Hostname < workers[j].Hostname
+		}
+
+		return workers[i].WID < workers[j].WID
+	})
+
+	return workers
 }
 
 func (m *Manager) SetState(state string) {
@@ -305,8 +442,8 @@ func (m *Manager) reapWorkers(now time.Time) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	for wid, lastBeat := range m.workers {
-		if now.Sub(lastBeat) > workerLifetime {
+	for wid, worker := range m.workers {
+		if worker.Connections == 0 && now.Sub(worker.LastBeat) > workerLifetime {
 			delete(m.workers, wid)
 		}
 	}

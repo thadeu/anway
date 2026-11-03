@@ -64,7 +64,7 @@ func BenchmarkDrain(b *testing.B) {
 					return
 				}
 
-				if err := store.Ack(fetched.JID); err != nil {
+				if _, err := store.Ack(fetched.JID); err != nil {
 					b.Error(err)
 
 					return

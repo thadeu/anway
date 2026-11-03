@@ -104,8 +104,8 @@ type Mutation struct {
 type Store interface {
 	Push(j *job.Job, now time.Time) error
 	Fetch(queues []string, wid string, now time.Time) (*job.Job, error)
-	Ack(jid string) error
-	Fail(jid string, now time.Time, decide Decide) error
+	Ack(jid string) (string, error)
+	Fail(jid string, now time.Time, decide Decide) (string, error)
 	MoveDue(now time.Time, limit int) (int, error)
 	ExpireReservations(now time.Time, limit int, decide Decide) (int, error)
 	SweepLocks(now time.Time, limit int) (int, error)
@@ -123,6 +123,16 @@ type Store interface {
 	SetThrottles(throttles map[string]Throttle)
 	Snapshot(path string) error
 	Stats() (Stats, error)
+	QueueDetails() ([]QueueInfo, error)
+	ListJobs(set, cursor string, limit int) (JobPage, error)
+	JobGroups(set string, maxScan int) (JobGroups, error)
+	BusyByWorker() (map[string]int, error)
+	LeaseCounts(now time.Time) (map[string]int, error)
+	Batches(limit int) ([]BatchSummary, error)
+	ClearQueue(name string) (int, error)
+	SaveMetrics(minutes []MetricMinute) error
+	LoadMetrics(first, last int64) ([]MetricMinute, error)
+	PruneMetrics(before int64, limit int) (int, error)
 	Flush() error
 	Close() error
 }

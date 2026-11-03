@@ -1,6 +1,7 @@
 package server_test
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"io"
@@ -980,5 +981,113 @@ func TestFlushIsDisabledByDefault(t *testing.T) {
 
 	if current := stats(t, f); current.Queues["default"] != 1 {
 		t.Fatalf("unexpected stats: %+v", current)
+	}
+}
+
+func TestDeadHookPushesNotice(t *testing.T) {
+	f := start(t, t.TempDir(), "")
+	worker := dial(t, f, "w1")
+	hook := map[string]any{"on_dead": map[string]any{"jobtype": "mail.bounced", "queue": "rails"}}
+
+	push(t, worker, map[string]any{"jid": "now", "retry": -1, "custom": hook})
+	push(t, worker, map[string]any{"jid": "later", "retry": 1, "custom": hook})
+
+	fetch(t, worker, "default")
+
+	if _, err := worker.Command("FAIL", map[string]any{"jid": "now", "errtype": "SMTP", "message": "550 no mailbox"}); err != nil {
+		t.Fatal(err)
+	}
+
+	notice := fetch(t, worker, "rails")
+	summary := notice["args"].([]any)[0].(map[string]any)
+
+	if notice["jobtype"] != "mail.bounced" || summary["jid"] != "now" || summary["failure"].(map[string]any)["message"] != "550 no mailbox" {
+		t.Fatalf("unexpected notice: %v", notice)
+	}
+
+	fetch(t, worker, "default")
+
+	if _, err := worker.Command("FAIL", map[string]any{"jid": "later"}); err != nil {
+		t.Fatal(err)
+	}
+
+	if current := stats(t, f); current.Queues["rails"] != 0 {
+		t.Fatalf("a retry must not fire the hook: %+v", current)
+	}
+
+	if err := f.manager.Tick(time.Now().Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+
+	fetch(t, worker, "default")
+
+	if _, err := worker.Command("FAIL", map[string]any{"jid": "later"}); err != nil {
+		t.Fatal(err)
+	}
+
+	if current := stats(t, f); current.Queues["rails"] != 1 || current.Dead != 2 {
+		t.Fatalf("the last failure must fire the hook: %+v", current)
+	}
+}
+
+func TestDeadHookSkipsManualKillAndChecksInput(t *testing.T) {
+	f := start(t, t.TempDir(), "")
+	worker := dial(t, f, "w1")
+	hook := map[string]any{"on_dead": map[string]any{"jobtype": "notice"}}
+
+	push(t, worker, map[string]any{"jid": "a", "at": time.Now().Add(time.Hour).Format(time.RFC3339), "custom": hook})
+
+	if _, err := worker.Command("MUTATE", `{"cmd":"kill","target":"scheduled"}`); err != nil {
+		t.Fatal(err)
+	}
+
+	if current := stats(t, f); current.Queues["default"] != 0 || current.Dead != 1 {
+		t.Fatalf("a manual kill must not fire the hook: %+v", current)
+	}
+
+	invalid := []string{
+		`{"jid":"b","jobtype":"x","args":[],"custom":{"on_dead":{}}}`,
+		`{"jid":"c","jobtype":"x","args":[],"custom":{"on_dead":{"jobtype":"n","queue":"a b"}}}`,
+		`{"jid":"d","jobtype":"x","args":[],"custom":{"on_dead":"notice"}}`,
+	}
+
+	for _, payload := range invalid {
+		if _, err := worker.Command("PUSH", payload); err == nil {
+			t.Fatalf("PUSH must fail: %s", payload)
+		}
+	}
+}
+
+func TestHelloRegistersWorkerData(t *testing.T) {
+	f := start(t, t.TempDir(), "")
+
+	conn, err := net.Dial("tcp", f.addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+
+	reader := bufio.NewReader(conn)
+
+	reader.ReadString('\n')
+	io.WriteString(conn, `HELLO {"v":2,"wid":"w9","hostname":"mta-1","pid":42,"labels":["go"],"concurrency":200}`+"\r\n")
+	reader.ReadString('\n')
+
+	workers := f.manager.Workers()
+
+	if len(workers) != 1 || workers[0].Concurrency != 200 || workers[0].Hostname != "mta-1" || workers[0].Connections != 1 {
+		t.Fatalf("unexpected workers: %+v", workers)
+	}
+
+	conn.Close()
+
+	waitFor := time.Now().Add(2 * time.Second)
+
+	for time.Now().Before(waitFor) && f.manager.Workers()[0].Connections != 0 {
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	if f.manager.Workers()[0].Connections != 0 {
+		t.Fatal("a closed connection must count down")
 	}
 }

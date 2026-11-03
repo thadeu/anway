@@ -23,6 +23,7 @@ Other components use only the storage interface, so the engine can change later.
 | `batch_expiry` | `time/bid` | None | Sweep index for batches |
 | `tracks` | `jid` | JSON | Job progress |
 | `track_expiry` | `time/jid` | None | Sweep index for tracks |
+| `metrics` | Minute | JSON | Done and failed counts for each minute, and done counts for each queue |
 | `meta` | Name | Value | Metadata, such as the schema version |
 
 `seq` comes from `Bucket.NextSequence`. `seq` and `time` are big-endian `uint64` values, so key order equals time order.
