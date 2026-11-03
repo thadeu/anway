@@ -24,6 +24,10 @@ PUSH --> SCHEDULED (future "at")
 - Delivery is at least once. A worker can receive a job again, so handlers must be idempotent.
 - The first fetch has no `failure` field. `retry_count` starts at 0 at the first failure.
 
+## Topics
+
+`PUBLISH` makes one job for each subscription of its topic. Each copy then follows this lifecycle by itself. An event with no subscription enters DEAD as one job, and a requeue of it publishes the event again. See [topics.md](topics.md).
+
 ## Retry delay
 
 ```text

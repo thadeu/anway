@@ -1174,3 +1174,58 @@ func TestBeatCarriesTheWantedThreads(t *testing.T) {
 		t.Fatalf("after the change, the beat must get OK: %q", line)
 	}
 }
+
+func TestPublishSubscribeAndUnsubscribeOverTCP(t *testing.T) {
+	f := start(t, t.TempDir(), "")
+
+	conn, err := net.Dial("tcp", f.addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+
+	reader := bufio.NewReader(conn)
+
+	command := func(line string) string {
+		io.WriteString(conn, line+"\r\n")
+
+		reply, _ := reader.ReadString('\n')
+
+		if strings.HasPrefix(reply, "$") {
+			body, _ := reader.ReadString('\n')
+
+			return strings.TrimSpace(body)
+		}
+
+		return strings.TrimSpace(reply)
+	}
+
+	reader.ReadString('\n')
+	command(`HELLO {"v":2}`)
+
+	for _, queue := range []string{"realtime", "push"} {
+		if reply := command(`SUBSCRIBE {"topic":"chat.message","queue":"` + queue + `","jobtype":"chat.` + queue + `"}`); reply != "+OK" {
+			t.Fatalf("SUBSCRIBE: %q", reply)
+		}
+	}
+
+	if reply := command(`PUBLISH {"topic":"chat.message","args":["hi"],"id":"msg-1"}`); reply != `{"event":"msg-1","jobs":2,"duplicate":false}` {
+		t.Fatalf("PUBLISH must reply with the event and its jobs: %q", reply)
+	}
+
+	if reply := command(`PUBLISH {"topic":"chat.message","args":["hi"],"id":"msg-1"}`); reply != `{"event":"msg-1","jobs":0,"duplicate":true}` {
+		t.Fatalf("a second PUBLISH of msg-1 must be a duplicate: %q", reply)
+	}
+
+	if reply := command(`UNSUBSCRIBE {"topic":"chat.message","queue":"push","jobtype":"chat.push"}`); reply != "+OK" {
+		t.Fatalf("UNSUBSCRIBE: %q", reply)
+	}
+
+	if reply := command(`PUBLISH {"topic":"chat.message","args":[]}`); !strings.Contains(reply, `"jobs":1`) {
+		t.Fatalf("after UNSUBSCRIBE, one subscription is left: %q", reply)
+	}
+
+	if reply := command(`PUBLISH {"topic":"bad topic","args":[]}`); !strings.HasPrefix(reply, "-ERR") {
+		t.Fatalf("a bad topic must be an error: %q", reply)
+	}
+}

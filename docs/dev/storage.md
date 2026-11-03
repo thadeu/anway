@@ -16,7 +16,7 @@ Other components use only the storage interface, so the engine can change later.
 | `dead` | `time/jid` | None | Dead set, by death time |
 | `counters` | Name | `uint64` | Size of each queue and set, and totals |
 | `paused` | Queue | Marker | Paused queues |
-| `uniques` | SHA-256 of type, queue, args | Expiry + `jid` | Unique locks |
+| `uniques` | SHA-256 of type, queue, args, or `topic NUL topic NUL event id` | Expiry + `jid` | Unique locks, and the dedup of published event ids |
 | `unique_expiry` | `time/hash` | None | Sweep index for locks |
 | `leases` | `queue NUL jid` | Expiry + `wid` | Throttle leases |
 | `batches` | `bid` | JSON | Batch status, callbacks, and child counts |
@@ -25,6 +25,7 @@ Other components use only the storage interface, so the engine can change later.
 | `track_expiry` | `time/jid` | None | Sweep index for tracks |
 | `metrics` | Minute | JSON | Done and failed counts for each minute, the peak of worker threads (`t`), and done counts for each queue |
 | `worker_settings` | Worker name (hostname, NUL, tag) | JSON | The threads or autoscale that an operator saved for the name |
+| `subscriptions` | Topic, NUL, queue, NUL, job type | JSON | Topic subscriptions |
 | `meta` | Name | Value | Metadata, such as the schema version |
 
 `seq` comes from `Bucket.NextSequence`. `seq` and `time` are big-endian `uint64` values, so key order equals time order.

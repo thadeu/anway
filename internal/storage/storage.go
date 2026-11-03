@@ -137,6 +137,10 @@ type Store interface {
 	SaveWorkerSetting(name string, setting WorkerSetting) error
 	LoadWorkerSetting(name string) (WorkerSetting, bool, error)
 	DeleteWorkerSetting(name string) error
+	Subscribe(subscription Subscription, now time.Time) error
+	Unsubscribe(topic, queue, jobtype string) error
+	Subscriptions(topic string) ([]Subscription, error)
+	Publish(event Event, now time.Time) (Published, error)
 	Flush() error
 	Close() error
 }

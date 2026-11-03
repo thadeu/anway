@@ -42,6 +42,11 @@ The Ruby `Anway::Worker` module is the one exception. It is a job API above the 
 - A worker does not cancel a fetch in progress, because the reply can hold a job.
 - After an empty reply that returns at once, the worker waits a short time, because a quiet server replies with no delay.
 
+## Topics
+
+- Topics are part of the protocol. Every client library implements `publish`, `subscribe`, and `unsubscribe`, and lets a worker declare its subscriptions and send them with `SUBSCRIBE` when it starts. See [topics.md](topics.md#client-requirements).
+- It passes scenarios T01 to T06.
+
 ## Worker threads
 
 - A worker sends its thread count in HELLO and in each `BEAT` as `concurrency`, and its queues and tag in HELLO. See [worker-threads.md](worker-threads.md#client-requirements).

@@ -48,7 +48,7 @@ var (
 	bucketBatchTTL  = []byte("batch_expiry")
 	bucketTracks    = []byte("tracks")
 	bucketTrackTTL  = []byte("track_expiry")
-	topBuckets      = [][]byte{bucketJobs, bucketQueues, bucketScheduled, bucketRetries, bucketWorking, bucketDead, bucketCounters, bucketPaused, bucketUniques, bucketUniqueTTL, bucketLeases, bucketBatches, bucketBatchTTL, bucketTracks, bucketTrackTTL, bucketMetrics, bucketWorkerSettings}
+	topBuckets      = [][]byte{bucketJobs, bucketQueues, bucketScheduled, bucketRetries, bucketWorking, bucketDead, bucketCounters, bucketPaused, bucketUniques, bucketUniqueTTL, bucketLeases, bucketBatches, bucketBatchTTL, bucketTracks, bucketTrackTTL, bucketMetrics, bucketWorkerSettings, bucketSubscriptions}
 )
 
 // record is the stored job with its current location.
@@ -765,6 +765,12 @@ func applyMutation(tx *bolt.Tx, rec *record, command string, now time.Time) erro
 
 		return moveToSet(tx, rec, bucketDead, now)
 	case "requeue":
+		// An event that no subscription received is published again, so the
+		// subscriptions of this moment get it.
+		if event, ok := unroutedEvent(&rec.Job); ok && rec.Job.Failure != nil {
+			return republish(tx, rec, event, now)
+		}
+
 		return enqueue(tx, rec, now)
 	default:
 		return tx.Bucket(bucketJobs).Delete([]byte(rec.Job.JID))

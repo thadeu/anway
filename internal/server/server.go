@@ -300,6 +300,12 @@ func (s *Server) dispatch(ctx context.Context, current *session, line []byte) bo
 		err = s.trackCommand(conn, args)
 	case "MUTATE":
 		err = s.mutate(conn, args)
+	case "PUBLISH":
+		err = s.publish(conn, args)
+	case "SUBSCRIBE":
+		err = s.subscribe(conn, args, s.manager.Subscribe)
+	case "UNSUBSCRIBE":
+		err = s.subscribe(conn, args, s.manager.Unsubscribe)
 	case "END":
 		protocol.WriteSimple(conn, "OK")
 

@@ -35,6 +35,9 @@ The protocol follows the [public Faktory work protocol](https://github.com/contr
 | `INFO` | None | Server data as JSON, with the `server` and `faktory` hashes |
 | `QUEUE` | `PAUSE`, `RESUME`, or `REMOVE`, then queue names or `*` | `OK` |
 | `MUTATE` | `{"cmd","target","filter"}` | `OK` |
+| `PUBLISH` | `{"topic","args","id","unique_for","custom"}`. An Anway extension: see [topics.md](topics.md). | `{"event","jobs","duplicate"}` |
+| `SUBSCRIBE` | `{"topic","queue","jobtype","retry","reserve_for"}`. An Anway extension. | `OK` |
+| `UNSUBSCRIBE` | `{"topic","queue","jobtype"}`. An Anway extension. | `OK` |
 | `BATCH NEW` | `{"parent_bid","description","success","complete"}` | The `bid` |
 | `BATCH OPEN` | `bid` | The `bid` |
 | `BATCH COMMIT` | `bid` | `OK` |

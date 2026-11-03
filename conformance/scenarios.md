@@ -31,4 +31,10 @@ Each client must pass these scenarios against a real server. A client maps each 
 | W09 | The shutdown timeout cancels the context of running jobs, and those jobs fail. |
 | W10 | A handler that ignores cancellation cannot block the shutdown. Its job fails, and a late return does not change that result. |
 | W11 | A server restart does not stop the worker. The worker reconnects and runs a job pushed after the restart. |
+| T01 | `publish` to a topic with three subscriptions makes one job in each subscriber queue, with the job type of the subscription, and `custom.topic` and `custom.event`. |
+| T02 | `subscribe` twice with the same topic, queue, and job type keeps one subscription. `unsubscribe` removes it, and a second `unsubscribe` is not an error. |
+| T03 | A second `publish` with the same event id returns duplicate and makes no job. |
+| T04 | `publish` to a topic with no subscription returns 0 jobs, and the event is in the dead set. |
+| T05 | A worker that declares a subscription sends `SUBSCRIBE` when it starts, and runs the copies of a published event. |
+| T06 | Two workers that subscribe two job types to one topic each run one copy of every event. |
 | W12 | The worker sends its thread count in `BEAT`. When the reply has `concurrency`, it starts or stops threads, lets a thread that stops finish its job, and reports the new count in a `BEAT` at once, not at the next interval. |

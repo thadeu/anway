@@ -321,6 +321,13 @@ func TestShutdownUnderLoadIsClean(t *testing.T) {
 func drain(t *testing.T, addr string) map[string]bool {
 	t.Helper()
 
+	return drainQueue(t, addr, "default")
+}
+
+// drainQueue fetches every job of one queue, and returns their jids.
+func drainQueue(t *testing.T, addr, queue string) map[string]bool {
+	t.Helper()
+
 	worker, err := testclient.Dial(addr, "drain", "")
 	if err != nil {
 		t.Fatal(err)
@@ -330,7 +337,7 @@ func drain(t *testing.T, addr string) map[string]bool {
 	survivors := map[string]bool{}
 
 	for {
-		reply, err := worker.Command("FETCH", "default")
+		reply, err := worker.Command("FETCH", queue)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -623,4 +630,61 @@ func connectWorker(t *testing.T, addr, wid string) net.Conn {
 	read()
 
 	return conn
+}
+
+// TestPublishSurvivesKill kills the server right after PUBLISH replies. Every
+// copy, and the subscriptions, must exist after the restart.
+func TestPublishSurvivesKill(t *testing.T) {
+	binary := filepath.Join(t.TempDir(), "server")
+
+	build := exec.Command("go", "build", "-o", binary, "github.com/thadeu/anway/cmd/server")
+	if output, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("build failed: %s", output)
+	}
+
+	dir := t.TempDir()
+	addr := freeAddr(t)
+	server := startServer(t, binary, dir, addr)
+
+	client, err := testclient.Dial(addr, "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	queues := []string{"realtime", "cassandra", "push"}
+
+	for _, queue := range queues {
+		if _, err := client.Command("SUBSCRIBE", map[string]string{"topic": "chat.message", "queue": queue, "jobtype": "chat." + queue}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	for index := range 20 {
+		if _, err := client.Command("PUBLISH", map[string]any{"topic": "chat.message", "args": []any{index}, "id": fmt.Sprint("msg-", index)}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	client.Close()
+	server.Process.Kill()
+	server.Wait()
+
+	startServer(t, binary, dir, addr)
+
+	for _, queue := range queues {
+		if got := len(drainQueue(t, addr, queue)); got != 20 {
+			t.Fatalf("queue %s has %d of 20 copies after kill -9", queue, got)
+		}
+	}
+
+	again, err := testclient.Dial(addr, "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer again.Close()
+
+	reply, err := again.Command("PUBLISH", map[string]any{"topic": "chat.message", "args": []any{}})
+	if err != nil || !strings.Contains(reply, `"jobs":3`) {
+		t.Fatalf("the subscriptions must survive kill -9: %q %v", reply, err)
+	}
 }
