@@ -136,4 +136,4 @@ A client that supports scaling must:
 5. Read `state` and `concurrency` apart. A reply can have one, the other, or both.
 6. Pass scenario W12 in [conformance/scenarios.md](../../conformance/scenarios.md).
 
-`anway-ruby` (0.3.0 and later), `anway-go` (0.5.0 and later), and `anway-js` (0.5.0 and later) support scaling. In Go a thread is a goroutine. In Node and Bun it is a job slot: one concurrent fetch-and-run loop in the event loop, which helps jobs that wait on I/O, not jobs that use the CPU.
+`anway-ruby`, `anway-go`, and `anway-js` support scaling. In Go a thread is a goroutine. In Node and Bun it is a job slot: one concurrent fetch-and-run loop in the event loop, which helps jobs that wait on I/O, not jobs that use the CPU.

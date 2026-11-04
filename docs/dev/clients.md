@@ -13,6 +13,15 @@ All repositories are public at `github.com/thadeu`. The project is open source f
 
 We support only modern language versions. There is no legacy runtime support.
 
+## Versions
+
+Since 0.5.1, the server and the official clients have the same version number. Each release of one repository is also a release of the others, with the same number, even when one of them has no change.
+
+- A client and a server with the same version are tested together. The client CI and release workflows run against the server release of the same version.
+- The platform gems of `anway-ruby` contain the server of the same version.
+- A client also works with an older server, but a feature that needs a new command, such as `PUSHB`, needs a server that has it.
+- Release the server first, because the client workflows download its binary.
+
 ## Contract
 
 The first client, `anway-go`, sets the client contract. All other clients have the same operations, argument order, defaults, and error kinds, with names in the style of each language.
