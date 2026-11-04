@@ -31,6 +31,10 @@ Each client must pass these scenarios against a real server. A client maps each 
 | W09 | The shutdown timeout cancels the context of running jobs, and those jobs fail. |
 | W10 | A handler that ignores cancellation cannot block the shutdown. Its job fails, and a late return does not change that result. |
 | W11 | A server restart does not stop the worker. The worker reconnects and runs a job pushed after the restart. |
+| I01 | A push with the contract keys `unique_for`, `unique_until`, `expires_in`, `expires_at`, `track`, and `on_dead` sends them in `custom`, with `on_dead.event` as `on_dead.jobtype`. The `event` goes out as `jobtype`. |
+| I02 | Two option sets merge in order: a single value from the later set wins, `topics` add up with no duplicates, and `custom` hashes merge. |
+| I03 | A second declaration for the same event in one worker is an error. |
+| I04 | A declaration with `topics` sends one `SUBSCRIBE` for each topic, with the event as the job type and the queue, retry, and reserve_for of the declaration, and the worker runs the copies. |
 | T01 | `publish` to a topic with three subscriptions makes one job in each subscriber queue, with the job type of the subscription, and `custom.topic` and `custom.event`. |
 | T02 | `subscribe` twice with the same topic, queue, and job type keeps one subscription. `unsubscribe` removes it, and a second `unsubscribe` is not an error. |
 | T03 | A second `publish` with the same event id returns duplicate and makes no job. |

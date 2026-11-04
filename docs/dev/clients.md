@@ -19,6 +19,47 @@ The first client, `anway-go`, sets the client contract. All other clients have t
 
 The Ruby `Anway::Worker` module is the one exception. It is a job API above the Ruby client, and the client contract does not include it. It uses the client for all server calls.
 
+## Input contract
+
+Since version 0.4.0, every client takes the same input names when an app declares or pushes a job. The client translates them to the fields of the protocol, so the server does not change. One table, the same in every language, is less to remember than the wire fields.
+
+| Contract key | Wire field | Note |
+|---|---|---|
+| `event` | `jobtype` | The name of what the job handles. In Ruby, the default is the class name. In Go and JS, it is the first argument of `on`. |
+| `queue` | `queue` | Default `default`. |
+| `retry` | `retry` | Default 25 (server). `0` discards at the first failure. `-1` goes to Dead at once. |
+| `reserve_for` | `reserve_for` | Seconds. |
+| `backtrace` | `backtrace` | Lines. |
+| `at` | `at` | A time to run later. For a push, not for a declaration. |
+| `unique_for` | `custom.unique_for` | Seconds. |
+| `unique_until` | `custom.unique_until` | `success` or `start`. |
+| `expires_in` | `custom.expires_in` | Seconds. |
+| `expires_at` | `custom.expires_at` | A time. |
+| `track` | `custom.track` | `true` sends `1`. |
+| `on_dead` | `custom.on_dead` | `{event, queue}`. Its `event` goes to `jobtype`. |
+| `custom` | `custom` | The app's own keys only. The keys above win over a key with the same name here. |
+| `topics` | One `SUBSCRIBE` for each topic | With `event` as the job type, and the `queue`, `retry`, and `reserve_for` of the declaration. For a declaration, not for a push. |
+
+Names follow the style of each language: `reserve_for` in Ruby, `reserveFor` in JS, `ReserveFor` in Go. Durations are seconds in Ruby and JS, and `time.Duration` in Go.
+
+**Several option sets merge in order.** A declaration can take more than one set: repeated `anway_options` calls in Ruby, or more than one options argument in Go and JS. The merge rules are the same everywhere:
+
+- A single value, such as `queue` or `retry`: the last set that has it wins.
+- `topics`: the topics of all sets add up, in order, with no duplicates.
+- `custom`: the hashes merge, and a later key wins.
+
+**The worker API:**
+
+| Language | Declaration | Push |
+|---|---|---|
+| Ruby | `anway_options event:, queue:, topics:, ...` in an `Anway::Worker` class. It can be called more than once. A subclass inherits all options except `event` and `topics`. | `perform_async`, `perform_in`, `perform_at`, and `set(...)` with the same keys. `Anway::Job.new(event, args, **options)`. |
+| Go | `worker.On(event, handler, options ...Options)` | `anway.NewJob(event, args, options ...Options)` |
+| JS | `worker.on(event, handler, ...options)` | `new Job(event, args, options)` |
+
+- A worker has one handler for each event. A second `on` for the same event is an error. Several flows for one topic use several events, each subscribed to the topic.
+- `on` is only for events. Lifecycle hooks, if a client adds them, get their own names, such as `onError`.
+- `client.subscribe` and `client.unsubscribe` take `topic`, `queue`, and `event`, with `retry` and `reserve_for` for `subscribe`.
+
 ## Layers
 
 1. **Connection:** Socket, TLS, handshake, RESP, reconnect, and pool.
@@ -44,7 +85,7 @@ The Ruby `Anway::Worker` module is the one exception. It is a job API above the 
 
 ## Topics
 
-- Topics are part of the protocol. Every client library implements `publish`, `subscribe`, and `unsubscribe`, and lets a worker declare its subscriptions and send them with `SUBSCRIBE` when it starts. See [topics.md](topics.md#client-requirements).
+- Topics are part of the protocol. Every client library implements `publish`, `subscribe`, and `unsubscribe`, and lets a worker declare its subscriptions with the `topics` key of the [input contract](#input-contract), and send them with `SUBSCRIBE` when it starts. See [topics.md](topics.md#client-requirements).
 - It passes scenarios T01 to T06.
 
 ## Worker threads

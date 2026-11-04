@@ -82,6 +82,6 @@ The web UI Topics page shows this list. It has no counts of its own, because eac
 A client library implements topics as part of the protocol:
 
 1. `publish(topic, args, id:, unique_for:, custom:)` sends `PUBLISH`, and returns the event id, the jobs, and duplicate.
-2. `subscribe(topic, queue, jobtype, retry:, reserve_for:)` and `unsubscribe(topic, queue, jobtype)` send the commands.
-3. A worker can declare its subscriptions, for example in a job class, and send `SUBSCRIBE` for each one when it starts, before its first `FETCH`. It fetches from the queues of its subscriptions.
+2. `subscribe(topic, queue, event, retry:, reserve_for:)` and `unsubscribe(topic, queue, event)` send the commands. `event` is the job type, as in the [input contract](clients.md#input-contract).
+3. A worker declares its subscriptions with the `topics` key of the input contract, and sends `SUBSCRIBE` for each one when it starts, before its first `FETCH`. It fetches from the queues of its subscriptions.
 4. It passes scenarios T01 to T06 in [conformance/scenarios.md](../../conformance/scenarios.md).
