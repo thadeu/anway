@@ -688,3 +688,44 @@ func TestPublishSurvivesKill(t *testing.T) {
 		t.Fatalf("the subscriptions must survive kill -9: %q %v", reply, err)
 	}
 }
+
+// TestPushBulkSurvivesKill kills the server right after PUSHB replies. Every
+// job of the bulk must exist after the restart.
+func TestPushBulkSurvivesKill(t *testing.T) {
+	binary := filepath.Join(t.TempDir(), "server")
+
+	build := exec.Command("go", "build", "-o", binary, "github.com/thadeu/anway/cmd/server")
+	if output, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("build failed: %s", output)
+	}
+
+	dir := t.TempDir()
+	addr := freeAddr(t)
+	server := startServer(t, binary, dir, addr)
+
+	client, err := testclient.Dial(addr, "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	jobs := make([]map[string]any, 500)
+
+	for index := range jobs {
+		jobs[index] = map[string]any{"jid": fmt.Sprint("bulk-", index), "jobtype": "x", "args": []any{index}}
+	}
+
+	reply, err := client.Command("PUSHB", jobs)
+	if err != nil || reply != "{}" {
+		t.Fatalf("PUSHB: %q %v", reply, err)
+	}
+
+	client.Close()
+	server.Process.Kill()
+	server.Wait()
+
+	startServer(t, binary, dir, addr)
+
+	if survivors := drain(t, addr); len(survivors) != 500 {
+		t.Fatalf("%d of 500 bulk jobs survived kill -9", len(survivors))
+	}
+}

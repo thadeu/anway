@@ -265,35 +265,65 @@ func (b *Bolt) Snapshot(path string) error {
 
 func (b *Bolt) Push(j *job.Job, now time.Time) error {
 	return b.write(func(tx *bolt.Tx) error {
-		if tx.Bucket(bucketJobs).Get([]byte(j.JID)) != nil {
-			return ErrDuplicateJob
-		}
-
-		rec := &record{Job: *j}
-		at, scheduled := j.ScheduledAt(now)
-
-		if err := checkBatchOpen(tx, j); err != nil {
-			return err
-		}
-
-		if err := takeUniqueLock(tx, j, at, scheduled, now); err != nil {
-			return err
-		}
-
-		if err := batchJobPushed(tx, j); err != nil {
-			return err
-		}
-
-		if scheduled {
-			if err := setTrack(tx, j, trackEnqueued, now, now.Add(trackLifetime)); err != nil {
-				return err
-			}
-
-			return moveToSet(tx, rec, bucketScheduled, at)
-		}
-
-		return enqueue(tx, rec, now)
+		return pushIn(tx, j, now)
 	})
+}
+
+// MaxBulk is the most jobs that one PushBulk takes.
+const MaxBulk = 1000
+
+// PushBulk pushes many jobs in one write. A refused job, such as a duplicate
+// jid or a unique lock, does not stop the others. It returns the error of each
+// refused job by jid, and an empty map when all jobs are in.
+func (b *Bolt) PushBulk(jobs []*job.Job, now time.Time) (map[string]error, error) {
+	failures := map[string]error{}
+
+	err := b.write(func(tx *bolt.Tx) error {
+		clear(failures)
+
+		for _, j := range jobs {
+			if err := pushIn(tx, j, now); err != nil {
+				failures[j.JID] = err
+			}
+		}
+
+		return nil
+	})
+
+	return failures, err
+}
+
+// pushIn adds one job in a write. Each check runs before the first write of
+// the job, so a refused job leaves nothing behind.
+func pushIn(tx *bolt.Tx, j *job.Job, now time.Time) error {
+	if tx.Bucket(bucketJobs).Get([]byte(j.JID)) != nil {
+		return ErrDuplicateJob
+	}
+
+	rec := &record{Job: *j}
+	at, scheduled := j.ScheduledAt(now)
+
+	if err := checkBatchOpen(tx, j); err != nil {
+		return err
+	}
+
+	if err := takeUniqueLock(tx, j, at, scheduled, now); err != nil {
+		return err
+	}
+
+	if err := batchJobPushed(tx, j); err != nil {
+		return err
+	}
+
+	if scheduled {
+		if err := setTrack(tx, j, trackEnqueued, now, now.Add(trackLifetime)); err != nil {
+			return err
+		}
+
+		return moveToSet(tx, rec, bucketScheduled, at)
+	}
+
+	return enqueue(tx, rec, now)
 }
 
 func (b *Bolt) Fetch(queues []string, wid string, now time.Time) (*job.Job, error) {

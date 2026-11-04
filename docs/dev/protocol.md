@@ -28,6 +28,7 @@ The protocol follows the [public Faktory work protocol](https://github.com/contr
 | Command | Argument | Reply |
 |---|---|---|
 | `PUSH` | Job JSON | `OK`, or an error |
+| `PUSHB` | An array of up to 1,000 jobs | A JSON object with the reason for each job that is not in, by jid, or `{}` when all are in. The jobs go in with one write. A refused job, such as a duplicate jid or a unique lock, does not stop the others. |
 | `FETCH` | Queue names | Job JSON, or null after a maximum of 2 seconds |
 | `ACK` | `{"jid"}` | `OK` |
 | `FAIL` | `{"jid","errtype","message","backtrace"}` | `OK` |

@@ -104,6 +104,7 @@ type Mutation struct {
 
 type Store interface {
 	Push(j *job.Job, now time.Time) error
+	PushBulk(jobs []*job.Job, now time.Time) (map[string]error, error)
 	Fetch(queues []string, wid string, now time.Time) (*job.Job, error)
 	Ack(jid string) (string, error)
 	Fail(jid string, now time.Time, decide Decide) (string, error)

@@ -280,6 +280,8 @@ func (s *Server) dispatch(ctx context.Context, current *session, line []byte) bo
 	switch verb {
 	case "PUSH":
 		err = s.push(conn, args)
+	case "PUSHB":
+		err = s.pushBulk(conn, args)
 	case "FETCH":
 		err = s.fetch(ctx, current, args)
 	case "ACK":
@@ -339,6 +341,29 @@ func (s *Server) push(conn net.Conn, args []byte) error {
 	}
 
 	return protocol.WriteSimple(conn, "OK")
+}
+
+// pushBulk runs PUSHB: an array of jobs in one write. The reply is a JSON
+// object with the reason for each job that is not in, by jid, and {} when all
+// jobs are in.
+func (s *Server) pushBulk(conn net.Conn, args []byte) error {
+	var jobs []*job.Job
+
+	if err := json.Unmarshal(args, &jobs); err != nil {
+		return fmt.Errorf("invalid PUSHB: %w", err)
+	}
+
+	failures, err := s.manager.PushBulk(jobs)
+	if err != nil {
+		return err
+	}
+
+	encoded, err := json.Marshal(failures)
+	if err != nil {
+		return err
+	}
+
+	return protocol.WriteBulk(conn, encoded)
 }
 
 func (s *Server) fetch(ctx context.Context, current *session, args []byte) error {

@@ -20,6 +20,7 @@ Each client must pass these scenarios against a real server. A client maps each 
 | C14 | One client works from many concurrent callers. |
 | C15 | A client reconnects after the server restarts. |
 | C16 | A call on a closed client returns the closed error kind. |
+| C17 | A bulk push of three jobs, one with a jid that exists, puts in the two others, and returns the reason for the refused jid. A bulk push where all jobs go in returns no failures. |
 | W01 | A worker runs a registered job and acks it. |
 | W02 | A handler error fails the job. |
 | W03 | A handler panic or exception fails the job, and the worker continues. |

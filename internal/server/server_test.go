@@ -1229,3 +1229,44 @@ func TestPublishSubscribeAndUnsubscribeOverTCP(t *testing.T) {
 		t.Fatalf("a bad topic must be an error: %q", reply)
 	}
 }
+
+func TestPushBulkOverTCP(t *testing.T) {
+	f := start(t, t.TempDir(), "")
+
+	conn, err := net.Dial("tcp", f.addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+
+	reader := bufio.NewReader(conn)
+
+	reply := func(line string) string {
+		io.WriteString(conn, line+"\r\n")
+
+		first, _ := reader.ReadString('\n')
+
+		if strings.HasPrefix(first, "$") {
+			body, _ := reader.ReadString('\n')
+
+			return strings.TrimSpace(body)
+		}
+
+		return strings.TrimSpace(first)
+	}
+
+	reader.ReadString('\n')
+	reply(`HELLO {"v":2}`)
+
+	if got := reply(`PUSHB [{"jid":"a","jobtype":"x","args":[]},{"jid":"b","jobtype":"x","args":[]}]`); got != "{}" {
+		t.Fatalf("all jobs in must reply {}: %q", got)
+	}
+
+	if got := reply(`PUSHB [{"jid":"a","jobtype":"x","args":[]},{"jid":"c","jobtype":"x","args":[]}]`); got != `{"a":"job id already exists"}` {
+		t.Fatalf("the reply must list the refused jid: %q", got)
+	}
+
+	if got := reply(`PUSHB {"jid":"x"}`); !strings.HasPrefix(got, "-ERR") {
+		t.Fatalf("an argument that is not an array must be an error: %q", got)
+	}
+}

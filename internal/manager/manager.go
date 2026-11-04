@@ -3,6 +3,7 @@ package manager
 
 import (
 	"context"
+	"fmt"
 	"math/rand/v2"
 	"sort"
 	"sync"
@@ -104,6 +105,44 @@ func (m *Manager) Push(j *job.Job) error {
 	m.wake()
 
 	return nil
+}
+
+// PushBulk pushes many jobs in one write. A job that fails its check or is
+// refused is left out, and the others go in. It returns the reason for each
+// job that is out, by jid. A job with no jid gets the key "" in the map.
+func (m *Manager) PushBulk(jobs []*job.Job) (map[string]string, error) {
+	if len(jobs) > storage.MaxBulk {
+		return nil, fmt.Errorf("a bulk push has at most %d jobs, not %d", storage.MaxBulk, len(jobs))
+	}
+
+	now := time.Now()
+	failures := map[string]string{}
+	valid := make([]*job.Job, 0, len(jobs))
+
+	for _, j := range jobs {
+		if err := j.Normalize(now); err != nil {
+			failures[j.JID] = err.Error()
+
+			continue
+		}
+
+		valid = append(valid, j)
+	}
+
+	refused, err := m.store.PushBulk(valid, now)
+	if err != nil {
+		return nil, err
+	}
+
+	for jid, reason := range refused {
+		failures[jid] = reason.Error()
+	}
+
+	if len(valid) > len(refused) {
+		m.wake()
+	}
+
+	return failures, nil
 }
 
 // Fetch returns nil when no job arrives in the wait time, and at once while
