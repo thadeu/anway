@@ -72,7 +72,7 @@ Names follow the style of each language: `reserve_for` in Ruby, `reserveFor` in 
 ## Layers
 
 1. **Connection:** Socket, TLS, handshake, RESP, reconnect, and pool.
-2. **Client:** Push, bulk push, fetch, ack, fail, batch, track, queue, mutate, and info.
+2. **Client:** Push, bulk push, fetch, ack, fail, batch, track, queue, mutate, info, and the topic commands, with bulk publish.
 3. **Worker:** Concurrency, heartbeat, quiet, terminate, job registry, and middleware.
 4. **Framework integration:** Rails only, for now.
 

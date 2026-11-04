@@ -121,6 +121,65 @@ func (m *Manager) Publish(request PublishRequest) (storage.Published, error) {
 	return published, nil
 }
 
+// PublishResult is the result of one event of a bulk publish: the event id,
+// the jobs that it made, duplicate, and the reason when the event is not in.
+type PublishResult struct {
+	storage.Published
+	Error string `json:"error,omitempty"`
+}
+
+// PublishBulk publishes many events in one write. An event that fails its
+// check, or that the store refuses, gets its reason, and the others go in.
+// The results keep the order of the requests.
+func (m *Manager) PublishBulk(requests []PublishRequest) ([]PublishResult, error) {
+	if len(requests) > storage.MaxBulk {
+		return nil, fmt.Errorf("a bulk publish has at most %d events, not %d", storage.MaxBulk, len(requests))
+	}
+
+	results := make([]PublishResult, len(requests))
+	events := make([]storage.Event, 0, len(requests))
+	positions := make([]int, 0, len(requests))
+
+	for index, request := range requests {
+		event, err := request.event()
+		if err != nil {
+			results[index] = PublishResult{Error: err.Error()}
+
+			continue
+		}
+
+		events = append(events, event)
+		positions = append(positions, index)
+	}
+
+	if len(events) == 0 {
+		return results, nil
+	}
+
+	published, failures, err := m.store.PublishBulk(events, time.Now())
+	if err != nil {
+		return nil, err
+	}
+
+	jobs := 0
+
+	for position, index := range positions {
+		results[index] = PublishResult{Published: published[position]}
+
+		if failures[position] != nil {
+			results[index].Error = failures[position].Error()
+		}
+
+		jobs += published[position].Jobs
+	}
+
+	if jobs > 0 {
+		m.wake()
+	}
+
+	return results, nil
+}
+
 func (request PublishRequest) event() (storage.Event, error) {
 	if err := checkTopic(request.Topic); err != nil {
 		return storage.Event{}, err

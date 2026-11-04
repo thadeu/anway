@@ -31,6 +31,30 @@ func (s *Server) publish(conn net.Conn, args []byte) error {
 	return protocol.WriteBulk(conn, encoded)
 }
 
+// publishBulk runs PUBLISHB: an array of PUBLISH arguments in one write. The
+// reply is a JSON array with one result for each event, in the same order:
+// the event id, the jobs that it made, duplicate, and error when the event is
+// not in.
+func (s *Server) publishBulk(conn net.Conn, args []byte) error {
+	var requests []manager.PublishRequest
+
+	if err := json.Unmarshal(args, &requests); err != nil {
+		return fmt.Errorf("invalid PUBLISHB: %w", err)
+	}
+
+	results, err := s.manager.PublishBulk(requests)
+	if err != nil {
+		return err
+	}
+
+	encoded, err := json.Marshal(results)
+	if err != nil {
+		return err
+	}
+
+	return protocol.WriteBulk(conn, encoded)
+}
+
 // subscribe runs SUBSCRIBE or UNSUBSCRIBE. Both are idempotent.
 func (s *Server) subscribe(conn net.Conn, args []byte, apply func(manager.SubscribeRequest) error) error {
 	var request manager.SubscribeRequest

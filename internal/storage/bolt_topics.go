@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
@@ -138,36 +139,97 @@ func topicSubscriptions(tx *bolt.Tx, topic string) []Subscription {
 // before the first write, because a failed operation does not roll back the
 // writes of the group that holds it.
 func (b *Bolt) Publish(event Event, now time.Time) (Published, error) {
-	result := Published{Event: event.ID}
+	var result Published
 
 	err := b.write(func(tx *bolt.Tx) error {
-		result = Published{Event: event.ID}
+		var err error
 
-		lock := eventLockKey(event.Topic, event.ID)
-
-		if event.Dedup > 0 {
-			if raw := tx.Bucket(bucketUniques).Get(lock); raw != nil && int64(binary.BigEndian.Uint64(raw)) > now.UnixNano() {
-				result.Duplicate = true
-
-				return nil
-			}
-		}
-
-		records, err := fanOut(tx, event, now)
-		if err != nil {
-			return err
-		}
-
-		if event.Dedup > 0 {
-			if err := lockEvent(tx, lock, now.Add(event.Dedup)); err != nil {
-				return err
-			}
-		}
-
-		result.Jobs, err = storeFanOut(tx, records, event, now)
+		result, err = publishIn(tx, event, now)
 
 		return err
 	})
+
+	return result, err
+}
+
+// MaxBulkJobs is the most jobs that one PublishBulk can make, over all its
+// events, so one write stays small.
+const MaxBulkJobs = 10_000
+
+// PublishBulk publishes up to MaxBulk events in one write, each as Publish
+// does. A refused event, such as a subscription whose job is not valid, does
+// not stop the others. It returns the result and the error of each event at
+// the index of the event. A batch that would make more than MaxBulkJobs jobs
+// is refused whole, before any write.
+func (b *Bolt) PublishBulk(events []Event, now time.Time) ([]Published, []error, error) {
+	results := make([]Published, len(events))
+	failures := make([]error, len(events))
+
+	err := b.write(func(tx *bolt.Tx) error {
+		clear(results)
+		clear(failures)
+
+		jobs := 0
+
+		for _, event := range events {
+			jobs += len(topicSubscriptions(tx, event.Topic))
+		}
+
+		if jobs > MaxBulkJobs {
+			return &RejectedError{Message: fmt.Sprintf("a bulk publish can make at most %d jobs, and these events make %d", MaxBulkJobs, jobs)}
+		}
+
+		for index, event := range events {
+			published, err := publishIn(tx, event, now)
+
+			var rejected *RejectedError
+
+			if errors.As(err, &rejected) {
+				results[index] = Published{Event: event.ID}
+				failures[index] = err
+
+				continue
+			}
+
+			if err != nil {
+				return err
+			}
+
+			results[index] = published
+		}
+
+		return nil
+	})
+
+	return results, failures, err
+}
+
+// publishIn publishes one event in a write. A refused event returns a
+// RejectedError before its first write, so it leaves nothing behind.
+func publishIn(tx *bolt.Tx, event Event, now time.Time) (Published, error) {
+	result := Published{Event: event.ID}
+	lock := eventLockKey(event.Topic, event.ID)
+
+	if event.Dedup > 0 {
+		if raw := tx.Bucket(bucketUniques).Get(lock); raw != nil && int64(binary.BigEndian.Uint64(raw)) > now.UnixNano() {
+			result.Duplicate = true
+
+			return result, nil
+		}
+	}
+
+	records, err := fanOut(tx, event, now)
+	if err != nil {
+		return result, &RejectedError{Message: err.Error()}
+	}
+
+	if event.Dedup > 0 {
+		if err := lockEvent(tx, lock, now.Add(event.Dedup)); err != nil {
+			return result, err
+		}
+	}
+
+	result.Jobs, err = storeFanOut(tx, records, event, now)
 
 	return result, err
 }

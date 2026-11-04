@@ -1270,3 +1270,62 @@ func TestPushBulkOverTCP(t *testing.T) {
 		t.Fatalf("an argument that is not an array must be an error: %q", got)
 	}
 }
+
+func TestPublishBulkOverTCP(t *testing.T) {
+	f := start(t, t.TempDir(), "")
+
+	conn, err := net.Dial("tcp", f.addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+
+	reader := bufio.NewReader(conn)
+
+	reply := func(line string) string {
+		io.WriteString(conn, line+"\r\n")
+
+		first, _ := reader.ReadString('\n')
+
+		if strings.HasPrefix(first, "$") {
+			body, _ := reader.ReadString('\n')
+
+			return strings.TrimSpace(body)
+		}
+
+		return strings.TrimSpace(first)
+	}
+
+	reader.ReadString('\n')
+	reply(`HELLO {"v":2}`)
+	reply(`SUBSCRIBE {"topic":"order.paid","queue":"billing","jobtype":"receipt"}`)
+	reply(`SUBSCRIBE {"topic":"order.paid","queue":"mailers","jobtype":"email"}`)
+
+	got := reply(`PUBLISHB [{"topic":"order.paid","args":[1],"id":"o1"},{"topic":"order.paid","args":[2],"id":"o1"},{"topic":"","args":[3]}]`)
+
+	var results []map[string]any
+
+	if err := json.Unmarshal([]byte(got), &results); err != nil || len(results) != 3 {
+		t.Fatalf("the reply must be one result for each event: %q", got)
+	}
+
+	if results[0]["event"] != "o1" || results[0]["jobs"] != float64(2) || results[0]["error"] != nil {
+		t.Fatalf("the first event must make two jobs: %v", results[0])
+	}
+
+	if results[1]["duplicate"] != true || results[1]["jobs"] != float64(0) {
+		t.Fatalf("the same id again must be a duplicate: %v", results[1])
+	}
+
+	if results[2]["error"] == nil {
+		t.Fatalf("a blank topic must be refused with a reason: %v", results[2])
+	}
+
+	if got := reply(`PUBLISHB []`); got != "[]" {
+		t.Fatalf("an empty bulk must reply []: %q", got)
+	}
+
+	if got := reply(`PUBLISHB {"topic":"order.paid"}`); !strings.HasPrefix(got, "-ERR") {
+		t.Fatalf("an argument that is not an array must be an error: %q", got)
+	}
+}

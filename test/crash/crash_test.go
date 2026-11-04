@@ -689,6 +689,57 @@ func TestPublishSurvivesKill(t *testing.T) {
 	}
 }
 
+// TestPublishBulkSurvivesKill kills the server right after PUBLISHB replies.
+// Every copy of every event of the bulk must exist after the restart.
+func TestPublishBulkSurvivesKill(t *testing.T) {
+	binary := filepath.Join(t.TempDir(), "server")
+
+	build := exec.Command("go", "build", "-o", binary, "github.com/thadeu/anway/cmd/server")
+	if output, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("build failed: %s", output)
+	}
+
+	dir := t.TempDir()
+	addr := freeAddr(t)
+	server := startServer(t, binary, dir, addr)
+
+	client, err := testclient.Dial(addr, "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	queues := []string{"billing", "mailers"}
+
+	for _, queue := range queues {
+		if _, err := client.Command("SUBSCRIBE", map[string]string{"topic": "order.paid", "queue": queue, "jobtype": "order." + queue}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	events := make([]map[string]any, 300)
+
+	for index := range events {
+		events[index] = map[string]any{"topic": "order.paid", "args": []any{index}, "id": fmt.Sprint("order-", index)}
+	}
+
+	reply, err := client.Command("PUBLISHB", events)
+	if err != nil || strings.Count(reply, `"jobs":2`) != 300 {
+		t.Fatalf("PUBLISHB: %.200q %v", reply, err)
+	}
+
+	client.Close()
+	server.Process.Kill()
+	server.Wait()
+
+	startServer(t, binary, dir, addr)
+
+	for _, queue := range queues {
+		if got := len(drainQueue(t, addr, queue)); got != 300 {
+			t.Fatalf("queue %s has %d of 300 copies after kill -9", queue, got)
+		}
+	}
+}
+
 // TestPushBulkSurvivesKill kills the server right after PUSHB replies. Every
 // job of the bulk must exist after the restart.
 func TestPushBulkSurvivesKill(t *testing.T) {

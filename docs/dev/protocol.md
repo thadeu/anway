@@ -37,6 +37,7 @@ The protocol follows the [public Faktory work protocol](https://github.com/contr
 | `QUEUE` | `PAUSE`, `RESUME`, or `REMOVE`, then queue names or `*` | `OK` |
 | `MUTATE` | `{"cmd","target","filter"}` | `OK` |
 | `PUBLISH` | `{"topic","args","id","unique_for","custom"}`. An Anway extension: see [topics.md](topics.md). | `{"event","jobs","duplicate"}` |
+| `PUBLISHB` | An array of up to 1,000 `PUBLISH` arguments. An Anway extension: see [topics.md](topics.md#bulk-publish). | An array with one `{"event","jobs","duplicate","error"}` for each event. The events go in with one write. A refused event does not stop the others. |
 | `SUBSCRIBE` | `{"topic","queue","jobtype","retry","reserve_for"}`. An Anway extension. | `OK` |
 | `UNSUBSCRIBE` | `{"topic","queue","jobtype"}`. An Anway extension. | `OK` |
 | `BATCH NEW` | `{"parent_bid","description","success","complete"}` | The `bid` |

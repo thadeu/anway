@@ -142,6 +142,7 @@ type Store interface {
 	Unsubscribe(topic, queue, jobtype string) error
 	Subscriptions(topic string) ([]Subscription, error)
 	Publish(event Event, now time.Time) (Published, error)
+	PublishBulk(events []Event, now time.Time) ([]Published, []error, error)
 	Flush() error
 	Close() error
 }

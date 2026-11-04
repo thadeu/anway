@@ -304,6 +304,8 @@ func (s *Server) dispatch(ctx context.Context, current *session, line []byte) bo
 		err = s.mutate(conn, args)
 	case "PUBLISH":
 		err = s.publish(conn, args)
+	case "PUBLISHB":
+		err = s.publishBulk(conn, args)
 	case "SUBSCRIBE":
 		err = s.subscribe(conn, args, s.manager.Subscribe)
 	case "UNSUBSCRIBE":
