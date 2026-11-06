@@ -30,6 +30,10 @@ type Failure struct {
 	Backtrace  []string `json:"backtrace,omitempty"`
 }
 
+// DefaultBacktrace is the number of backtrace lines a failure keeps when the
+// job does not set backtrace. A negative backtrace keeps none.
+const DefaultBacktrace = 30
+
 type Job struct {
 	JID        string          `json:"jid"`
 	Type       string          `json:"jobtype"`

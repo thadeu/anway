@@ -379,6 +379,37 @@ func readEntry(tx *bolt.Tx, bucket *bolt.Bucket, key []byte, timed bool) (JobEnt
 	return entry, true
 }
 
+// Job reads one job by its jid in one short transaction. The record holds
+// its set and, for a timed set, the key with the time.
+func (b *Bolt) Job(jid string) (JobEntry, bool, error) {
+	var (
+		entry JobEntry
+		found bool
+	)
+
+	err := b.db.View(func(tx *bolt.Tx) error {
+		if tx.Bucket(bucketJobs).Get([]byte(jid)) == nil {
+			return nil
+		}
+
+		rec, err := load(tx, jid)
+		if err != nil {
+			return err
+		}
+
+		entry = JobEntry{Job: rec.Job, State: rec.State, WID: rec.WID}
+		found = true
+
+		if rec.State != string(bucketQueues) && len(rec.Key) >= 8 {
+			entry.At = time.Unix(0, int64(binary.BigEndian.Uint64(rec.Key[:8]))).UTC()
+		}
+
+		return nil
+	})
+
+	return entry, found, err
+}
+
 // JobGroups scans a set page by page, so that no read transaction stays open.
 func (b *Bolt) JobGroups(set string, maxScan int) (JobGroups, error) {
 	result := JobGroups{}

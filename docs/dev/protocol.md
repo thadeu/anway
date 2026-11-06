@@ -70,7 +70,7 @@ A worker with a limit, such as the size of its database pool, sends it as `max_c
 | `reserve_for` | No | 1800 | Seconds. Minimum 60. |
 | `at` | No | Now | RFC3339 |
 | `retry` | No | 25 | 0 discards a failed job. -1 sends it to the dead set. |
-| `backtrace` | No | 0 | Lines to keep |
+| `backtrace` | No | 30 | Lines of the failure backtrace to keep. `-1` keeps none. |
 | `created_at` | No | Server time | |
 | `custom` | No | | JSON hash |
 | `enqueued_at` | Read-only | | Set by the server |

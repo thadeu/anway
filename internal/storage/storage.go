@@ -127,6 +127,9 @@ type Store interface {
 	Stats() (Stats, error)
 	QueueDetails() ([]QueueInfo, error)
 	ListJobs(set, cursor string, limit int, filter JobFilter) (JobPage, error)
+	// Job finds one job in any set by its jid. Found is false when no job
+	// has the jid: it finished, or it never existed.
+	Job(jid string) (entry JobEntry, found bool, err error)
 	JobGroups(set string, maxScan int) (JobGroups, error)
 	BusyByWorker() (map[string]int, error)
 	LeaseCounts(now time.Time) (map[string]int, error)

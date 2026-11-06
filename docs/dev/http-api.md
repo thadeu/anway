@@ -23,6 +23,7 @@ Do not give the token to a browser. A proxy, such as the web UI image or the Rai
 | DELETE | `/api/v1/queues/{name}/jobs` | Delete the waiting jobs. The paused state stays. |
 | GET | `/api/v1/jobs?set=&limit=&cursor=&queue=&jobtype=&worker=` | One page of jobs |
 | GET | `/api/v1/jobs/groups?set=` | Jobs grouped by cause |
+| GET | `/api/v1/jobs/{jid}` | One job in any set, with its `set`, or 404. See [One job](#one-job). |
 | POST | `/api/v1/jobs/actions` | Requeue, kill, or discard jobs |
 | POST | `/api/v1/jobs` | Enqueue a job. The body is a job payload. |
 | GET | `/api/v1/workers` | Worker processes: hostname, pid, tag, queues, threads, busy count, start time, last beat |
@@ -48,6 +49,14 @@ Filters are optional, and an empty filter matches all jobs:
 With a filter, one page reads at most 5,000 jobs. So a page can have fewer jobs than `limit`, or none, and still have a `next_cursor`. Read pages until `next_cursor` is blank.
 
 Each job has `group`, the same value that `/jobs/groups` returns. A waiting job has `enqueued_at`. A running job has `worker` and `started_at`, and `at` is the end of its reservation.
+
+## One job
+
+`GET /api/v1/jobs/{jid}` finds a job in any set by its jid, in one read: `{"set": "retries", "job": {...}}`. `set` is `waiting`, `working`, `retries`, `scheduled`, or `dead`. The job has the same fields as in a page of jobs, with `failure` (`retry_count`, `failed_at`, `next_at`, `errtype`, `message`, `backtrace`) when it failed.
+
+A finished job is not kept, so its jid answers `404 {"error":"not found"}`, the same as a jid that never existed.
+
+A failure keeps the first 30 lines of the backtrace that the worker sends. A job sets another number with `backtrace`, and `-1` keeps none.
 
 ## Groups
 

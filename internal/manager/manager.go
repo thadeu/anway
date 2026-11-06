@@ -251,6 +251,10 @@ func (m *Manager) ListJobs(set, cursor string, limit int, filter storage.JobFilt
 	return m.store.ListJobs(set, cursor, limit, filter)
 }
 
+func (m *Manager) Job(jid string) (storage.JobEntry, bool, error) {
+	return m.store.Job(jid)
+}
+
 func (m *Manager) JobGroups(set string, maxScan int) (storage.JobGroups, error) {
 	return m.store.JobGroups(set, maxScan)
 }
@@ -631,7 +635,13 @@ func decideRetry(j *job.Job, report FailReport, now time.Time) storage.Dispositi
 		failure.RetryCount = j.Failure.RetryCount + 1
 	}
 
-	if lines := min(j.Backtrace, len(report.Backtrace)); lines > 0 {
+	keep := j.Backtrace
+
+	if keep == 0 {
+		keep = job.DefaultBacktrace
+	}
+
+	if lines := min(keep, len(report.Backtrace)); lines > 0 {
 		failure.Backtrace = report.Backtrace[:lines]
 	}
 

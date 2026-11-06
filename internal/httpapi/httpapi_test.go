@@ -752,3 +752,113 @@ func TestSchedulesAndBatches(t *testing.T) {
 		t.Fatalf("unexpected batches: %+v", batches)
 	}
 }
+
+type oneJob struct {
+	Set string `json:"set"`
+	Job struct {
+		JID       string       `json:"jid"`
+		State     string       `json:"state"`
+		Worker    string       `json:"worker"`
+		At        *time.Time   `json:"at"`
+		StartedAt *time.Time   `json:"started_at"`
+		Failure   *job.Failure `json:"failure"`
+	} `json:"job"`
+}
+
+func TestJobByJIDInEachSet(t *testing.T) {
+	f := start(t)
+
+	f.push("wait-1", "mail.send", "default", time.Time{})
+	f.push("later-1", "mail.send", "default", time.Now().Add(time.Hour))
+
+	var got oneJob
+
+	if status := f.call("GET", "/api/v1/jobs/wait-1", nil, &got); status != http.StatusOK || got.Set != "waiting" || got.Job.JID != "wait-1" {
+		t.Fatalf("waiting job: %d %+v", status, got)
+	}
+
+	if f.call("GET", "/api/v1/jobs/later-1", nil, &got); got.Set != "scheduled" || got.Job.At == nil {
+		t.Fatalf("scheduled job: %+v", got)
+	}
+
+	if _, err := f.manager.Fetch(t.Context(), []string{"default"}, "w1"); err != nil {
+		t.Fatal(err)
+	}
+
+	if f.call("GET", "/api/v1/jobs/wait-1", nil, &got); got.Set != "working" || got.Job.Worker != "w1" || got.Job.StartedAt == nil {
+		t.Fatalf("working job: %+v", got)
+	}
+
+	jid := f.failJob("report.build", "boom")
+
+	if f.call("GET", "/api/v1/jobs/"+jid, nil, &got); got.Set != "retries" || got.Job.Failure == nil || got.Job.Failure.Message != "boom" {
+		t.Fatalf("retried job: %+v", got)
+	}
+}
+
+func TestJobByJIDNotFound(t *testing.T) {
+	f := start(t)
+
+	var body map[string]string
+
+	if status := f.call("GET", "/api/v1/jobs/missing", nil, &body); status != http.StatusNotFound || body["error"] != "not found" {
+		t.Fatalf("missing job: %d %v", status, body)
+	}
+
+	f.push("done-1", "mail.send", "default", time.Time{})
+
+	if _, err := f.manager.Fetch(t.Context(), []string{"default"}, "w1"); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := f.manager.Ack("done-1"); err != nil {
+		t.Fatal(err)
+	}
+
+	if status := f.call("GET", "/api/v1/jobs/done-1", nil, nil); status != http.StatusNotFound {
+		t.Fatalf("a finished job is not kept: %d", status)
+	}
+
+	if status := f.call("GET", "/api/v1/jobs/groups?set=retries", nil, nil); status != http.StatusOK {
+		t.Fatalf("groups must still route: %d", status)
+	}
+}
+
+func TestFailureKeepsTheBacktraceByDefault(t *testing.T) {
+	f := start(t)
+
+	lines := make([]string, 40)
+
+	for i := range lines {
+		lines[i] = fmt.Sprintf("app/jobs/x.rb:%d", i)
+	}
+
+	cases := []struct {
+		backtrace int
+		want      int
+	}{{0, job.DefaultBacktrace}, {5, 5}, {-1, 0}}
+
+	for _, c := range cases {
+		jid := fmt.Sprintf("bt-%d", c.backtrace)
+
+		if err := f.manager.Push(&job.Job{JID: jid, Type: "x", Args: json.RawMessage(`[]`), Backtrace: c.backtrace}); err != nil {
+			t.Fatal(err)
+		}
+
+		if _, err := f.manager.Fetch(t.Context(), []string{"default"}, "w1"); err != nil {
+			t.Fatal(err)
+		}
+
+		if err := f.manager.Fail(manager.FailReport{JID: jid, ErrType: "E", Message: "m", Backtrace: lines}); err != nil {
+			t.Fatal(err)
+		}
+
+		var got oneJob
+
+		f.call("GET", "/api/v1/jobs/"+jid, nil, &got)
+
+		if len(got.Job.Failure.Backtrace) != c.want {
+			t.Fatalf("backtrace %d: kept %d lines, want %d", c.backtrace, len(got.Job.Failure.Backtrace), c.want)
+		}
+	}
+}

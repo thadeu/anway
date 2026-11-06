@@ -63,6 +63,7 @@ func (a *API) routes() http.Handler {
 	mux.HandleFunc("DELETE /api/v1/queues/{name}/jobs", a.clear)
 	mux.HandleFunc("GET /api/v1/jobs", a.jobs)
 	mux.HandleFunc("GET /api/v1/jobs/groups", a.groups)
+	mux.HandleFunc("GET /api/v1/jobs/{jid}", a.job)
 	mux.HandleFunc("POST /api/v1/jobs/actions", a.actions)
 	mux.HandleFunc("POST /api/v1/jobs", a.enqueue)
 	mux.HandleFunc("GET /api/v1/workers", a.workers)
@@ -352,6 +353,34 @@ func (a *API) jobs(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{"jobs": views, "next_cursor": page.Next})
+}
+
+// job returns one job in any set, with its set, or 404. A finished job is
+// not kept, so it is not found.
+func (a *API) job(w http.ResponseWriter, r *http.Request) {
+	entry, found, err := a.manager.Job(r.PathValue("jid"))
+	if err != nil {
+		a.fail(w, err)
+
+		return
+	}
+
+	if !found {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "not found"})
+
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{"job": viewOf(entry), "set": setOf(entry.State)})
+}
+
+// setOf names a stored state as the sets of GET /api/v1/jobs do.
+func setOf(state string) string {
+	if state == "queues" {
+		return "waiting"
+	}
+
+	return state
 }
 
 func (a *API) groups(w http.ResponseWriter, r *http.Request) {
