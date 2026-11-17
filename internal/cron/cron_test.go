@@ -1,10 +1,12 @@
 package cron
 
 import (
+	"errors"
 	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -128,7 +130,7 @@ func TestCustomFieldsAndArgsReachTheJob(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	built, err := settings.Entries[0].Job.build()
+	built, err := settings.Entries[0].Job.build("cron-test")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -329,4 +331,190 @@ func prepared(t *testing.T, spec, jobtype string) Entry {
 	}
 
 	return current
+}
+
+func TestEntryIDsAreStableAndDistinct(t *testing.T) {
+	store := openStore(t, t.TempDir())
+	defer store.Close()
+
+	scheduler, _ := newScheduler(t, store)
+	entries := []Entry{entry("0 0 * * *", "a"), entry("0 0 * * *", "a"), entry("30 0 * * *", "a")}
+
+	if err := scheduler.Schedule(ScheduleRequest{Tag: "shop", Entries: entries}); err != nil {
+		t.Fatal(err)
+	}
+
+	scheduler.SetEntries([]Entry{prepared(t, "0 0 * * *", "a")})
+
+	first := scheduler.Upcoming()
+	ids := map[string]bool{}
+
+	for _, current := range first {
+		ids[current.ID] = true
+
+		if len(current.ID) != 12 || len(current.NextRuns) != NextRuns || !current.NextRuns[0].Equal(current.Next) {
+			t.Fatalf("unexpected entry: %+v", current)
+		}
+	}
+
+	if len(ids) != 4 {
+		t.Fatalf("each entry needs its own id: %v", ids)
+	}
+
+	if err := scheduler.Schedule(ScheduleRequest{Tag: "shop", Entries: entries}); err != nil {
+		t.Fatal(err)
+	}
+
+	for i, current := range scheduler.Upcoming() {
+		if current.ID != first[i].ID {
+			t.Fatalf("a new SCHEDULE with the same entries must keep the ids: %s, %s", current.ID, first[i].ID)
+		}
+	}
+}
+
+// clientEntry schedules one entry for the tag shop and returns its id.
+func clientEntry(t *testing.T, scheduler *Scheduler, spec string) string {
+	t.Helper()
+
+	if err := scheduler.Schedule(ScheduleRequest{Tag: "shop", Entries: []Entry{entry(spec, "refill")}}); err != nil {
+		t.Fatal(err)
+	}
+
+	return scheduler.Upcoming()[0].ID
+}
+
+func TestPauseSkipsRunsAndSurvivesADeployAndARestart(t *testing.T) {
+	dir := t.TempDir()
+	store := openStore(t, dir)
+	scheduler, jobs := newScheduler(t, store)
+	id := clientEntry(t, scheduler, "*/5 * * * *")
+
+	if _, err := scheduler.Pause("ffffffffffff", "Ana"); !errors.Is(err, ErrUnknownEntry) {
+		t.Fatalf("an unknown id must fail: %v", err)
+	}
+
+	pause, err := scheduler.Pause(id, "Ana")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if again, _ := scheduler.Pause(id, "Bob"); again.PausedBy != "Ana" || again.PausedAt != pause.PausedAt {
+		t.Fatalf("a second pause must keep the first: %+v", again)
+	}
+
+	scheduler.Tick(time.Now().UTC().Add(6 * time.Minute))
+
+	if stats, _ := jobs.Stats(); stats.Queues["ops"] != 0 {
+		t.Fatalf("a paused entry must not run: %+v", stats)
+	}
+
+	clientEntry(t, scheduler, "*/5 * * * *")
+
+	store.Close()
+
+	store = openStore(t, dir)
+	defer store.Close()
+
+	scheduler, jobs = newScheduler(t, store)
+
+	if err := scheduler.LoadClient(); err != nil {
+		t.Fatal(err)
+	}
+
+	upcoming := scheduler.Upcoming()
+
+	if upcoming[0].Paused == nil || upcoming[0].Paused.PausedBy != "Ana" {
+		t.Fatalf("a deploy and a restart must keep the pause: %+v", upcoming[0])
+	}
+
+	if err := scheduler.Resume(id); err != nil {
+		t.Fatal(err)
+	}
+
+	scheduler.Tick(time.Now().UTC().Add(6 * time.Minute))
+
+	if stats, _ := jobs.Stats(); stats.Queues["ops"] != 1 {
+		t.Fatalf("a resumed entry must run again: %+v", stats)
+	}
+}
+
+func TestAPauseOfAChangedEntryIsStale(t *testing.T) {
+	store := openStore(t, t.TempDir())
+	defer store.Close()
+
+	scheduler, _ := newScheduler(t, store)
+	id := clientEntry(t, scheduler, "*/5 * * * *")
+
+	if _, err := scheduler.Pause(id, ""); err != nil {
+		t.Fatal(err)
+	}
+
+	if stale := scheduler.StalePauses(); len(stale) != 0 {
+		t.Fatalf("the pause of a current entry is not stale: %+v", stale)
+	}
+
+	changed := clientEntry(t, scheduler, "*/10 * * * *")
+
+	stale := scheduler.StalePauses()
+
+	if changed == id || len(stale) != 1 || stale[0].ID != id || stale[0].Schedule != "*/5 * * * *" {
+		t.Fatalf("a pause whose entry changed must be stale: %+v", stale)
+	}
+
+	if scheduler.Upcoming()[0].Paused != nil {
+		t.Fatal("the changed entry runs on its schedule")
+	}
+
+	if err := scheduler.Resume(id); err != nil {
+		t.Fatal(err)
+	}
+
+	if stale := scheduler.StalePauses(); len(stale) != 0 {
+		t.Fatalf("a resume must clear a stale pause: %+v", stale)
+	}
+}
+
+func TestRunNowPushesAManualRun(t *testing.T) {
+	store := openStore(t, t.TempDir())
+	defer store.Close()
+
+	scheduler, jobs := newScheduler(t, store)
+	id := clientEntry(t, scheduler, "0 0 * * *")
+	next := scheduler.Upcoming()[0].Next
+
+	if _, err := scheduler.Pause(id, ""); err != nil {
+		t.Fatal(err)
+	}
+
+	jid, err := scheduler.RunNow(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if !strings.HasPrefix(jid, "cron-manual-"+id+"-") {
+		t.Fatalf("unexpected jid %q", jid)
+	}
+
+	if _, err := scheduler.RunNow("ffffffffffff"); !errors.Is(err, ErrUnknownEntry) {
+		t.Fatalf("an unknown id must fail: %v", err)
+	}
+
+	runs, err := jobs.CronRuns()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(runs[id]) != 1 || runs[id][0].JID != jid || !runs[id][0].Manual {
+		t.Fatalf("the manual run must be in the history: %+v", runs)
+	}
+
+	if !scheduler.Upcoming()[0].Next.Equal(next) {
+		t.Fatal("run now must not change the schedule")
+	}
+
+	clientEntry(t, scheduler, "0 1 * * *")
+
+	if runs, _ := jobs.CronRuns(); len(runs) != 0 {
+		t.Fatalf("the runs of a removed entry must go: %+v", runs)
+	}
 }

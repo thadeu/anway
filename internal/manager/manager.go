@@ -439,12 +439,28 @@ func (m *Manager) Register(info WorkerInfo) {
 	current.LastBeat = time.Now()
 }
 
+// Disconnect records a closed connection. When the last connection of a
+// worker with a tag closes, the server saves the time for the tag, so the
+// console can say when a worker of the tag was last seen, also after a
+// restart.
 func (m *Manager) Disconnect(wid string) {
 	m.mu.Lock()
-	defer m.mu.Unlock()
+
+	tag := ""
 
 	if current := m.workers[wid]; current != nil && current.Connections > 0 {
 		current.Connections--
+
+		if current.Connections == 0 {
+			tag = current.Tag
+		}
+	}
+
+	m.mu.Unlock()
+
+	// A failed save only makes the last seen time older.
+	if tag != "" {
+		m.store.SaveTagSeen(tag, time.Now())
 	}
 }
 

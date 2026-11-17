@@ -5,6 +5,7 @@ import (
 	"crypto/subtle"
 	"encoding/json"
 	"errors"
+	"io"
 	"log/slog"
 	"math"
 	"net/http"
@@ -69,6 +70,10 @@ func (a *API) routes() http.Handler {
 	mux.HandleFunc("GET /api/v1/workers", a.workers)
 	mux.HandleFunc("PATCH /api/v1/workers/{wid}", a.scaleWorker)
 	mux.HandleFunc("GET /api/v1/schedules", a.schedules)
+	mux.HandleFunc("POST /api/v1/schedules/{id}/run", a.runEntry)
+	mux.HandleFunc("POST /api/v1/schedules/{id}/pause", a.pauseEntry)
+	mux.HandleFunc("POST /api/v1/schedules/{id}/resume", a.resumeEntry)
+	mux.HandleFunc("DELETE /api/v1/schedules/tags/{tag}", a.removeTag)
 	mux.HandleFunc("GET /api/v1/topics", a.topics)
 	mux.HandleFunc("GET /api/v1/batches", a.batches)
 
@@ -692,24 +697,34 @@ func (a *API) schedules(w http.ResponseWriter, _ *http.Request) {
 		return
 	}
 
-	cronViews := []map[string]any{}
+	cronViews := []cronView{}
+	stale := []storage.CronPause{}
+	tagViews := []tagView{}
 
 	if a.options.Scheduler != nil {
-		for _, entry := range a.options.Scheduler.Upcoming() {
-			view := map[string]any{
-				"schedule": entry.Schedule,
-				"jobtype":  entry.JobType,
-				"queue":    entry.Queue,
-				"next":     entry.Next,
-				"source":   entry.Source,
-			}
+		runs, err := a.manager.CronRuns()
+		if err != nil {
+			a.fail(w, err)
 
-			if entry.Source == cron.SourceClient {
-				view["tag"] = entry.Tag
-			}
-
-			cronViews = append(cronViews, view)
+			return
 		}
+
+		tags, err := a.manager.Tags()
+		if err != nil {
+			a.fail(w, err)
+
+			return
+		}
+
+		for _, entry := range a.options.Scheduler.Upcoming() {
+			cronViews = append(cronViews, cronViewOf(entry, runs[entry.ID]))
+
+			if entry.Source == cron.SourceClient && (len(tagViews) == 0 || tagViews[len(tagViews)-1].Tag != entry.Tag) {
+				tagViews = append(tagViews, tagViewOf(entry.Tag, tags[entry.Tag]))
+			}
+		}
+
+		stale = a.options.Scheduler.StalePauses()
 	}
 
 	throttleViews := []map[string]any{}
@@ -728,7 +743,222 @@ func (a *API) schedules(w http.ResponseWriter, _ *http.Request) {
 		return strings.Compare(left["queue"].(string), right["queue"].(string))
 	})
 
-	writeJSON(w, http.StatusOK, map[string]any{"cron": cronViews, "throttles": throttleViews})
+	writeJSON(w, http.StatusOK, map[string]any{"cron": cronViews, "stale_pauses": stale, "tags": tagViews, "throttles": throttleViews})
+}
+
+// cronView is one cron entry. job is the template of the jobs that it
+// pushes, with the defaults of a push. history is the last runs, newest
+// first, and last is the first of them.
+type cronView struct {
+	ID       string            `json:"id"`
+	Schedule string            `json:"schedule"`
+	JobType  string            `json:"jobtype"`
+	Queue    string            `json:"queue"`
+	Next     time.Time         `json:"next"`
+	NextRuns []time.Time       `json:"next_runs"`
+	Source   string            `json:"source"`
+	Tag      string            `json:"tag,omitempty"`
+	Job      templateView      `json:"job"`
+	Paused   *pauseView        `json:"paused"`
+	Last     *storage.CronRun  `json:"last"`
+	History  []storage.CronRun `json:"history"`
+}
+
+type templateView struct {
+	Type       string         `json:"type"`
+	Queue      string         `json:"queue"`
+	Retry      int            `json:"retry"`
+	Args       []any          `json:"args"`
+	ReserveFor int            `json:"reserve_for"`
+	Custom     map[string]any `json:"custom"`
+}
+
+type pauseView struct {
+	PausedAt string `json:"paused_at"`
+	PausedBy string `json:"paused_by,omitempty"`
+}
+
+// tagView is one client tag with its workers. last_seen is the last time
+// that a worker of the tag was connected, or null when no worker was seen.
+type tagView struct {
+	Tag      string     `json:"tag"`
+	Workers  int        `json:"workers"`
+	LastSeen *time.Time `json:"last_seen"`
+}
+
+func cronViewOf(entry cron.Upcoming, runs []storage.CronRun) cronView {
+	template := templateView{
+		Type:       entry.Job.Type,
+		Queue:      entry.Queue,
+		Retry:      job.DefaultRetry,
+		Args:       nonNil(entry.Job.Args),
+		ReserveFor: entry.Job.ReserveFor,
+		Custom:     entry.Job.Custom,
+	}
+
+	if entry.Job.Retry != nil {
+		template.Retry = *entry.Job.Retry
+	}
+
+	if template.ReserveFor == 0 {
+		template.ReserveFor = job.DefaultReserveFor
+	}
+
+	view := cronView{
+		ID:       entry.ID,
+		Schedule: entry.Schedule,
+		JobType:  entry.JobType,
+		Queue:    entry.Queue,
+		Next:     entry.Next,
+		NextRuns: entry.NextRuns,
+		Source:   entry.Source,
+		Tag:      entry.Tag,
+		Job:      template,
+		History:  nonNil(runs),
+	}
+
+	if entry.Paused != nil {
+		view.Paused = &pauseView{PausedAt: entry.Paused.PausedAt, PausedBy: entry.Paused.PausedBy}
+	}
+
+	if len(runs) > 0 {
+		view.Last = &runs[0]
+	}
+
+	return view
+}
+
+func tagViewOf(tag string, workers manager.TagWorkers) tagView {
+	view := tagView{Tag: tag, Workers: workers.Online}
+
+	if !workers.LastSeen.IsZero() {
+		seen := workers.LastSeen.UTC()
+		view.LastSeen = &seen
+	}
+
+	return view
+}
+
+// maxPausedBy is the longest name that a pause keeps.
+const maxPausedBy = 100
+
+// runEntry pushes one job of a cron entry now. The schedule does not change.
+func (a *API) runEntry(w http.ResponseWriter, r *http.Request) {
+	if !a.knownEntry(w, r) {
+		return
+	}
+
+	jid, err := a.options.Scheduler.RunNow(r.PathValue("id"))
+	if err != nil {
+		a.entryError(w, err)
+
+		return
+	}
+
+	writeJSON(w, http.StatusCreated, map[string]string{"id": r.PathValue("id"), "jid": jid})
+}
+
+// pauseEntry pauses a cron entry. The optional body {"by": "name"} names the
+// user who paused it.
+func (a *API) pauseEntry(w http.ResponseWriter, r *http.Request) {
+	if !a.knownEntry(w, r) {
+		return
+	}
+
+	var request struct {
+		By string `json:"by"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&request); err != nil && !errors.Is(err, io.EOF) {
+		writeError(w, http.StatusBadRequest, "invalid body: "+err.Error())
+
+		return
+	}
+
+	by := strings.TrimSpace(request.By)
+
+	if len(by) > maxPausedBy {
+		by = by[:maxPausedBy]
+	}
+
+	pause, err := a.options.Scheduler.Pause(r.PathValue("id"), by)
+	if err != nil {
+		a.entryError(w, err)
+
+		return
+	}
+
+	writeJSON(w, http.StatusOK, pause)
+}
+
+// resumeEntry removes the pause of a cron entry, also of an entry that is
+// gone. A missing pause is not an error.
+func (a *API) resumeEntry(w http.ResponseWriter, r *http.Request) {
+	if !a.knownEntry(w, r) {
+		return
+	}
+
+	if err := a.options.Scheduler.Resume(r.PathValue("id")); err != nil {
+		a.fail(w, err)
+
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{"id": r.PathValue("id")})
+}
+
+// removeTag removes all cron entries of a client tag, as UNSCHEDULE does. A
+// missing tag is not an error.
+func (a *API) removeTag(w http.ResponseWriter, r *http.Request) {
+	if a.options.Scheduler == nil {
+		writeError(w, http.StatusNotFound, "schedules are not available")
+
+		return
+	}
+
+	tag := r.PathValue("tag")
+
+	if !job.ValidQueue(tag) {
+		writeError(w, http.StatusBadRequest, "invalid tag")
+
+		return
+	}
+
+	if err := a.options.Scheduler.Unschedule(tag); err != nil {
+		a.fail(w, err)
+
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{"tag": tag})
+}
+
+// knownEntry checks that the scheduler is on and that the id has the form of
+// an entry id.
+func (a *API) knownEntry(w http.ResponseWriter, r *http.Request) bool {
+	if a.options.Scheduler == nil {
+		writeError(w, http.StatusNotFound, "schedules are not available")
+
+		return false
+	}
+
+	if !job.ValidCronID(r.PathValue("id")) {
+		writeError(w, http.StatusBadRequest, "invalid cron entry id")
+
+		return false
+	}
+
+	return true
+}
+
+func (a *API) entryError(w http.ResponseWriter, err error) {
+	if errors.Is(err, cron.ErrUnknownEntry) {
+		writeError(w, http.StatusNotFound, err.Error())
+
+		return
+	}
+
+	a.fail(w, err)
 }
 
 func (a *API) batches(w http.ResponseWriter, _ *http.Request) {

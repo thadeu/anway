@@ -27,6 +27,9 @@ Other components use only the storage interface, so the engine can change later.
 | `worker_settings` | Worker name (hostname, NUL, tag) | JSON | The threads or autoscale that an operator saved for the name |
 | `subscriptions` | Topic, NUL, queue, NUL, job type | JSON | Topic subscriptions |
 | `schedules` | Tag | JSON | The cron entries that a client sent with `SCHEDULE` for the tag |
+| `cron_runs` | Cron entry id | JSON | The last 8 runs of the entry, newest first. They change in the same transaction as the job. |
+| `cron_pauses` | Cron entry id | JSON | Paused cron entries, with the time and the user |
+| `tags_seen` | Tag | RFC 3339 time | The last time that a worker of the tag was connected |
 | `meta` | Name | Value | Metadata, such as the schema version |
 
 `seq` comes from `Bucket.NextSequence`. `seq` and `time` are big-endian `uint64` values, so key order equals time order.

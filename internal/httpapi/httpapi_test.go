@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -903,5 +904,168 @@ func TestSchedulesShowTheSourceOfEachCronEntry(t *testing.T) {
 
 	if entry["source"] != "client" || entry["tag"] != "shop" || entry["jobtype"] != "refill" || entry["queue"] != "default" || entry["next"] == nil {
 		t.Fatalf("a client entry must show its source and tag: %+v", entry)
+	}
+}
+
+// startScheduler serves the API with a scheduler that has one entry of the
+// tag shop, and returns the fixture, the scheduler, and the entry id.
+func startScheduler(t *testing.T) (*fixture, *cron.Scheduler, string) {
+	t.Helper()
+
+	store, err := storage.OpenBolt(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	jobs := manager.New(store)
+	scheduler := cron.New(jobs, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	retry := 3
+
+	entry := cron.Entry{Schedule: "0 9 * * 1-5", Job: cron.JobTemplate{Type: "invoices.issue", Queue: "billing", Retry: &retry, Args: []any{7}}}
+
+	if err := scheduler.Schedule(cron.ScheduleRequest{Tag: "shop", Entries: []cron.Entry{entry}}); err != nil {
+		t.Fatal(err)
+	}
+
+	server := httptest.NewServer(httpapi.Handler(jobs, httpapi.Options{Token: token, Scheduler: scheduler}))
+
+	t.Cleanup(func() {
+		server.Close()
+		store.Close()
+	})
+
+	return &fixture{t: t, manager: jobs, server: server}, scheduler, scheduler.Upcoming()[0].ID
+}
+
+type scheduleList struct {
+	Cron        []map[string]any `json:"cron"`
+	StalePauses []map[string]any `json:"stale_pauses"`
+	Tags        []map[string]any `json:"tags"`
+}
+
+func TestScheduleEntriesHaveAnIDTheirJobAndTheirRuns(t *testing.T) {
+	f, _, id := startScheduler(t)
+
+	var created map[string]string
+
+	if status := f.call("POST", "/api/v1/schedules/"+id+"/run", nil, &created); status != http.StatusCreated || !strings.HasPrefix(created["jid"], "cron-manual-"+id) {
+		t.Fatalf("unexpected run now: %d %+v", status, created)
+	}
+
+	if _, err := f.manager.Fetch(f.t.Context(), []string{"billing"}, "w1"); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := f.manager.Fail(manager.FailReport{JID: created["jid"], ErrType: "Timeout", Message: "no answer"}); err != nil {
+		t.Fatal(err)
+	}
+
+	var listed scheduleList
+
+	f.call("GET", "/api/v1/schedules", nil, &listed)
+
+	entry := listed.Cron[0]
+	template := entry["job"].(map[string]any)
+	last := entry["last"].(map[string]any)
+
+	if entry["id"] != id || len(entry["next_runs"].([]any)) != 5 || entry["paused"] != nil {
+		t.Fatalf("unexpected entry: %+v", entry)
+	}
+
+	if template["queue"] != "billing" || template["retry"] != float64(3) || template["reserve_for"] != float64(1800) || len(template["args"].([]any)) != 1 {
+		t.Fatalf("unexpected job template: %+v", template)
+	}
+
+	if last["jid"] != created["jid"] || last["status"] != "failed" || last["manual"] != true || last["error"] != "Timeout: no answer" || len(entry["history"].([]any)) != 1 {
+		t.Fatalf("unexpected last run: %+v", entry)
+	}
+
+	if len(listed.Tags) != 1 || listed.Tags[0]["tag"] != "shop" || listed.Tags[0]["workers"] != float64(0) || listed.Tags[0]["last_seen"] != nil {
+		t.Fatalf("unexpected tags: %+v", listed.Tags)
+	}
+}
+
+func TestPauseAndResumeAScheduleEntry(t *testing.T) {
+	f, scheduler, id := startScheduler(t)
+
+	var pause map[string]any
+
+	if status := f.call("POST", "/api/v1/schedules/"+id+"/pause", map[string]string{"by": "Ana"}, &pause); status != http.StatusOK || pause["paused_by"] != "Ana" || pause["paused_at"] == "" {
+		t.Fatalf("unexpected pause: %d %+v", status, pause)
+	}
+
+	var listed scheduleList
+
+	f.call("GET", "/api/v1/schedules", nil, &listed)
+
+	if paused := listed.Cron[0]["paused"].(map[string]any); paused["paused_by"] != "Ana" {
+		t.Fatalf("unexpected entry: %+v", listed.Cron[0])
+	}
+
+	changed := cron.Entry{Schedule: "0 10 * * 1-5", Job: cron.JobTemplate{Type: "invoices.issue", Queue: "billing"}}
+
+	if err := scheduler.Schedule(cron.ScheduleRequest{Tag: "shop", Entries: []cron.Entry{changed}}); err != nil {
+		t.Fatal(err)
+	}
+
+	f.call("GET", "/api/v1/schedules", nil, &listed)
+
+	if len(listed.StalePauses) != 1 || listed.StalePauses[0]["id"] != id || listed.StalePauses[0]["schedule"] != "0 9 * * 1-5" {
+		t.Fatalf("a pause of a changed entry must be stale: %+v", listed.StalePauses)
+	}
+
+	if status := f.call("POST", "/api/v1/schedules/"+id+"/resume", nil, nil); status != http.StatusOK {
+		t.Fatalf("unexpected resume status %d", status)
+	}
+
+	f.call("GET", "/api/v1/schedules", nil, &listed)
+
+	if len(listed.StalePauses) != 0 {
+		t.Fatalf("a resume must clear a stale pause: %+v", listed.StalePauses)
+	}
+}
+
+func TestScheduleActionsCheckTheEntry(t *testing.T) {
+	f, _, _ := startScheduler(t)
+
+	cases := []struct {
+		method, path string
+		status       int
+	}{
+		{"POST", "/api/v1/schedules/ffffffffffff/run", http.StatusNotFound},
+		{"POST", "/api/v1/schedules/ffffffffffff/pause", http.StatusNotFound},
+		{"POST", "/api/v1/schedules/nothex/run", http.StatusBadRequest},
+		{"POST", "/api/v1/schedules/nothex/resume", http.StatusBadRequest},
+		{"DELETE", "/api/v1/schedules/tags/bad%20tag", http.StatusBadRequest},
+	}
+
+	for _, current := range cases {
+		if status := f.call(current.method, current.path, nil, nil); status != current.status {
+			t.Fatalf("%s %s: got %d, want %d", current.method, current.path, status, current.status)
+		}
+	}
+
+	plain := start(t)
+
+	if status := plain.call("POST", "/api/v1/schedules/ffffffffffff/run", nil, nil); status != http.StatusNotFound {
+		t.Fatalf("no scheduler must answer 404: %d", status)
+	}
+}
+
+func TestRemoveTheEntriesOfATag(t *testing.T) {
+	f, _, _ := startScheduler(t)
+
+	for range 2 {
+		if status := f.call("DELETE", "/api/v1/schedules/tags/shop", nil, nil); status != http.StatusOK {
+			t.Fatalf("unexpected status %d", status)
+		}
+	}
+
+	var listed scheduleList
+
+	f.call("GET", "/api/v1/schedules", nil, &listed)
+
+	if len(listed.Cron) != 0 || len(listed.Tags) != 0 {
+		t.Fatalf("the entries of the tag must go: %+v", listed)
 	}
 }

@@ -839,3 +839,105 @@ func TestScheduleSurvivesKill(t *testing.T) {
 		t.Fatalf("the client entries must survive kill -9: %+v", listed.Cron)
 	}
 }
+
+// schedulesOf reads GET /api/v1/schedules.
+func schedulesOf(t *testing.T, web string) []map[string]any {
+	t.Helper()
+
+	response, err := http.Get("http://" + web + "/api/v1/schedules")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+
+	var listed struct {
+		Cron []map[string]any `json:"cron"`
+	}
+
+	json.NewDecoder(response.Body).Decode(&listed)
+
+	return listed.Cron
+}
+
+func postJSON(t *testing.T, url, body string) map[string]any {
+	t.Helper()
+
+	response, err := http.Post(url, "application/json", strings.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+
+	var reply map[string]any
+
+	json.NewDecoder(response.Body).Decode(&reply)
+
+	if response.StatusCode >= 300 {
+		t.Fatalf("POST %s: %d %+v", url, response.StatusCode, reply)
+	}
+
+	return reply
+}
+
+// TestCronPauseAndRunsSurviveKill pauses a cron entry, runs it once by hand
+// to its ACK, and kills the server right after. The pause and the run must
+// be back after the restart.
+func TestCronPauseAndRunsSurviveKill(t *testing.T) {
+	binary := filepath.Join(t.TempDir(), "server")
+
+	build := exec.Command("go", "build", "-o", binary, "github.com/thadeu/anway/cmd/server")
+	if output, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("build failed: %s", output)
+	}
+
+	dir := t.TempDir()
+	addr := freeAddr(t)
+	web := freeAddr(t)
+
+	t.Setenv("WEB_ADDR", web)
+
+	server := startServer(t, binary, dir, addr)
+
+	client, err := testclient.Dial(addr, "w1", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	schedule := `{"tag":"shop","entries":[{"schedule":"0 0 * * *","job":{"type":"credits.refill","queue":"billing"}}]}`
+
+	if _, err := client.Command("SCHEDULE", schedule); err != nil {
+		t.Fatal(err)
+	}
+
+	id := schedulesOf(t, web)[0]["id"].(string)
+	base := "http://" + web + "/api/v1/schedules/" + id
+
+	postJSON(t, base+"/pause", `{"by":"Ana"}`)
+	jid := postJSON(t, base+"/run", "")["jid"].(string)
+
+	if _, err := client.Command("FETCH", "billing"); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := client.Command("ACK", map[string]string{"jid": jid}); err != nil {
+		t.Fatal(err)
+	}
+
+	client.Close()
+	server.Process.Kill()
+	server.Wait()
+
+	startServer(t, binary, dir, addr)
+
+	entry := schedulesOf(t, web)[0]
+	paused, _ := entry["paused"].(map[string]any)
+	last, _ := entry["last"].(map[string]any)
+
+	if paused == nil || paused["paused_by"] != "Ana" {
+		t.Fatalf("the pause must survive kill -9: %+v", entry)
+	}
+
+	if last == nil || last["jid"] != jid || last["status"] != "done" {
+		t.Fatalf("the run must survive kill -9 with its status: %+v", entry)
+	}
+}

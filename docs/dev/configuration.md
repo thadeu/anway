@@ -93,3 +93,14 @@ UNSCHEDULE {"tag":"shop"}
 - `FLUSH` removes the entries of all tags.
 - All processes with one tag must declare the same entries, because the last `SCHEDULE` wins. Give a process with other entries its own tag.
 - `GET /api/v1/schedules` shows the source of each entry: `conf.d`, or `client` with its tag.
+
+### Pause, run now, and history
+
+Since 0.7.0, each cron entry has an id, and the web UI can pause it, run it now, and show its last runs. See [http-api.md](http-api.md#schedules).
+
+- **Id:** a short hash of the source, the tag, the job type, and the schedule. A new `SCHEDULE` with the same entry keeps the id. A change of the schedule or the job type makes a new entry.
+- **Pause:** a paused entry does not run on its schedule. Its next times still pass, and missed times do not run after a resume. The server saves the pause on disk, apart from the entries, so a restart and a new `SCHEDULE` of the tag, as at a deploy, do not resume it. A pause whose entry is gone is stale. The API shows it, and a resume clears it. `SIGHUP` keeps all pauses.
+- **Run now:** pushes one job of the entry at once, also of a paused entry. The jid starts with `cron-manual-`. The schedule does not change.
+- **History:** the server keeps the last 8 runs of each entry on disk: jid, status, push, start and end times, duration, and the error of the last failure. A run changes in the same write as its job, at each push, fetch, `ACK`, `FAIL`, expired reservation, and web action. The jid of a run names its entry: `cron-<id>-<random>`. A job that is not a run costs one prefix check. When an entry goes away, its runs go at the next change of the entries.
+- **Workers of a tag:** the API counts the connected workers of each tag, and gives the last time that a worker of the tag was connected. The server saves that time when the last connection of a worker closes, so it stays after a restart.
+- `FLUSH` removes the pauses, the runs, and the saved times of the tags.

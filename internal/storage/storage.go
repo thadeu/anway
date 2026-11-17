@@ -150,6 +150,13 @@ type Store interface {
 	SaveSchedule(tag string, entries json.RawMessage, now time.Time) error
 	DeleteSchedule(tag string) error
 	Schedules() ([]ClientSchedule, error)
+	CronRuns() (map[string][]CronRun, error)
+	KeepCronRuns(ids []string) error
+	SaveCronPause(pause CronPause) error
+	DeleteCronPause(id string) error
+	CronPauses() ([]CronPause, error)
+	SaveTagSeen(tag string, at time.Time) error
+	TagsSeen() (map[string]time.Time, error)
 	Flush() error
 	Close() error
 }

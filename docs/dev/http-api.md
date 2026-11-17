@@ -29,7 +29,11 @@ Do not give the token to a browser. A proxy, such as the web UI image or the Rai
 | GET | `/api/v1/workers` | Worker processes: hostname, pid, tag, queues, threads, busy count, start time, last beat |
 | PATCH | `/api/v1/workers/{wid}` | Change the threads of a worker, or its autoscale. See [Workers](#workers). |
 | GET | `/api/v1/topics` | Topics, their subscriptions, and the connected workers that fetch from each subscription queue. See [topics.md](topics.md#http-api-and-web-ui). |
-| GET | `/api/v1/schedules` | Cron entries with the next run, and throttles in use. See [Schedules](#schedules). |
+| GET | `/api/v1/schedules` | Cron entries with their next runs, job, pause and last runs, the workers of each tag, and throttles in use. See [Schedules](#schedules). |
+| POST | `/api/v1/schedules/{id}/run` | Push one job of a cron entry now. The schedule does not change. |
+| POST | `/api/v1/schedules/{id}/pause` | Pause a cron entry. Optional body `{"by": "name"}`. |
+| POST | `/api/v1/schedules/{id}/resume` | Remove the pause of a cron entry |
+| DELETE | `/api/v1/schedules/tags/{tag}` | Remove all cron entries of a tag, as `UNSCHEDULE` does |
 | GET | `/api/v1/batches` | Batches, up to 200 |
 
 Errors are `{"error":"..."}` with status 400, 401, 409, or 500. A unique lock conflict is 409.
@@ -122,16 +126,49 @@ The server saves each changed minute once a minute and at shutdown, and loads th
 
 ## Schedules
 
-`GET /api/v1/schedules` returns `cron` and `throttles`.
+`GET /api/v1/schedules` returns `cron`, `stale_pauses`, `tags`, and `throttles`. One entry of `cron`:
 
 ```json
-{"cron": [
-  {"schedule": "*/5 * * * *", "jobtype": "Cleanup", "queue": "ops", "next": "2026-11-17T12:05:00Z", "source": "conf.d"},
-  {"schedule": "0 0 * * *", "jobtype": "credits.refill", "queue": "default", "next": "2026-11-18T00:00:00Z", "source": "client", "tag": "shop"}
-], "throttles": []}
+{
+  "id": "3f9a2c41d0be",
+  "schedule": "0 9 * * 1-5",
+  "jobtype": "invoices.issue",
+  "queue": "billing",
+  "next": "2026-11-18T09:00:00Z",
+  "next_runs": ["2026-11-18T09:00:00Z", "2026-11-19T09:00:00Z", "2026-11-20T09:00:00Z", "2026-11-21T09:00:00Z", "2026-11-24T09:00:00Z"],
+  "source": "client",
+  "tag": "shop",
+  "job": {"type": "invoices.issue", "queue": "billing", "retry": 5, "args": [], "reserve_for": 1800, "custom": null},
+  "paused": {"paused_at": "2026-11-12T14:03:10.120Z", "paused_by": "Ana"},
+  "last": {"jid": "cron-3f9a2c41d0be-9b1e04c2d7a3f650", "status": "failed", "pushed_at": "2026-11-17T09:00:00.004Z", "started_at": "2026-11-17T09:00:00.210Z", "finished_at": "2026-11-17T09:00:30.214Z", "duration_ms": 30004, "error": "SefazTimeout: no answer in 30 s"},
+  "history": [{"jid": "cron-3f9a2c41d0be-9b1e04c2d7a3f650", "status": "failed", "...": "..."}]
+}
 ```
 
-Each cron entry has `source`: `conf.d` for an entry of a YAML file in `CONF_DIR`, or `client` for an entry that an app sent with `SCHEDULE`. A `client` entry also has its `tag`. The `conf.d` entries come first, in file order, then the `client` entries, by tag. See [configuration.md](configuration.md#cron-from-the-app).
+- `id` is a short hash of the source, the tag, the job type, and the schedule. It stays the same across restarts, and across a new `SCHEDULE` with the same entry. A change of the schedule or the job type gives a new id.
+- `source` is `conf.d` for an entry of a YAML file in `CONF_DIR`, or `client` for an entry that an app sent with `SCHEDULE`. A `client` entry also has its `tag`. The `conf.d` entries come first, in file order, then the `client` entries, by tag. See [configuration.md](configuration.md#cron-from-the-app).
+- `next_runs` has the next 5 times, in UTC. `next` is the first of them.
+- `job` is the job that the entry pushes, with the defaults of a push: `queue` `default`, `retry` 25, and `reserve_for` 1800.
+- `paused` is null for an entry that runs on its schedule.
+- `history` has the last 8 runs, newest first, and `last` is the first of them, or null. A run has `jid`, `status`, `pushed_at`, and when they apply `manual`, `started_at`, `finished_at`, `duration_ms`, and `error`. `status` is `pushed` (in a queue), `running`, `done`, `failed` (a retry comes, or `retry` is 0), or `dead`. `error` is the error of the last failure. See [configuration.md](configuration.md#pause-run-now-and-history).
+
+`stale_pauses` lists the pauses whose entry is gone, for example because a deploy changed the schedule. Each one has `id`, `source`, `tag`, `jobtype`, `schedule`, `paused_at`, and `paused_by`. `POST /api/v1/schedules/{id}/resume` clears it.
+
+`tags` has one item for each tag that has entries, in tag order: `{"tag": "shop", "workers": 1, "last_seen": "2026-11-17T12:04:55Z"}`. `workers` counts the worker processes of the tag that are connected now. `last_seen` is the last time that a worker of the tag was connected, or null when no worker was seen. A tag with entries and no worker is often an app that is gone.
+
+### Actions
+
+| Route | Reply |
+|---|---|
+| `POST /api/v1/schedules/{id}/run` | `201 {"id": "...", "jid": "cron-manual-..."}` |
+| `POST /api/v1/schedules/{id}/pause` | `200` with the pause: `id`, `source`, `tag`, `jobtype`, `schedule`, `paused_at`, `paused_by` |
+| `POST /api/v1/schedules/{id}/resume` | `200 {"id": "..."}`, also when the entry was not paused |
+| `DELETE /api/v1/schedules/tags/{tag}` | `200 {"tag": "..."}`, also for a tag with no entries |
+
+- An id that is not 12 hex digits, or a tag that does not follow the queue name rule, is `400`. An id that no entry has is `404` for `run` and `pause`. A server with no scheduler answers `404`.
+- `pause` takes an optional body `{"by": "Ana"}`, the user who paused, up to 100 bytes. A pause of a paused entry keeps the first pause.
+- `resume` also clears a stale pause.
+- `DELETE /api/v1/schedules/tags/{tag}` is the same as `UNSCHEDULE`. A worker of the tag that starts sends its entries again.
 
 ## Limits
 

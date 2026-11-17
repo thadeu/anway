@@ -587,7 +587,12 @@ func saveTrack(tx *bolt.Tx, record *trackRecord) error {
 }
 
 // setTrack changes the state of a tracked job, and keeps percent and desc.
+// Each change of a job state calls it, so it also notes the run of a cron job.
 func setTrack(tx *bolt.Tx, j *job.Job, state string, now, expiry time.Time) error {
+	if err := noteCronRun(tx, j, state, now); err != nil {
+		return err
+	}
+
 	if !j.Tracked() {
 		return nil
 	}
