@@ -48,7 +48,7 @@ var (
 	bucketBatchTTL  = []byte("batch_expiry")
 	bucketTracks    = []byte("tracks")
 	bucketTrackTTL  = []byte("track_expiry")
-	topBuckets      = [][]byte{bucketJobs, bucketQueues, bucketScheduled, bucketRetries, bucketWorking, bucketDead, bucketCounters, bucketPaused, bucketUniques, bucketUniqueTTL, bucketLeases, bucketBatches, bucketBatchTTL, bucketTracks, bucketTrackTTL, bucketMetrics, bucketWorkerSettings, bucketSubscriptions}
+	topBuckets      = [][]byte{bucketJobs, bucketQueues, bucketScheduled, bucketRetries, bucketWorking, bucketDead, bucketCounters, bucketPaused, bucketUniques, bucketUniqueTTL, bucketLeases, bucketBatches, bucketBatchTTL, bucketTracks, bucketTrackTTL, bucketMetrics, bucketWorkerSettings, bucketSubscriptions, bucketSchedules}
 )
 
 // record is the stored job with its current location.

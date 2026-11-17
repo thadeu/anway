@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/thadeu/anway/internal/config"
+	"github.com/thadeu/anway/internal/cron"
 	"github.com/thadeu/anway/internal/job"
 	"github.com/thadeu/anway/internal/manager"
 	"github.com/thadeu/anway/internal/protocol"
@@ -37,10 +38,13 @@ const (
 type Options struct {
 	Password   string
 	AllowFlush bool
+	// Scheduler runs SCHEDULE and UNSCHEDULE. Without it, both commands fail.
+	Scheduler *cron.Scheduler
 }
 
 type Server struct {
 	manager    *manager.Manager
+	scheduler  *cron.Scheduler
 	password   string
 	allowFlush bool
 	log        *slog.Logger
@@ -54,6 +58,7 @@ type Server struct {
 func New(m *manager.Manager, options Options, log *slog.Logger) *Server {
 	return &Server{
 		manager:    m,
+		scheduler:  options.Scheduler,
 		password:   options.Password,
 		allowFlush: options.AllowFlush,
 		log:        log,
@@ -310,6 +315,10 @@ func (s *Server) dispatch(ctx context.Context, current *session, line []byte) bo
 		err = s.subscribe(conn, args, s.manager.Subscribe)
 	case "UNSUBSCRIBE":
 		err = s.subscribe(conn, args, s.manager.Unsubscribe)
+	case "SCHEDULE":
+		err = s.schedule(conn, args)
+	case "UNSCHEDULE":
+		err = s.unschedule(conn, args)
 	case "END":
 		protocol.WriteSimple(conn, "OK")
 
@@ -702,6 +711,12 @@ func (s *Server) flush(conn net.Conn) error {
 
 	if err := s.manager.Flush(); err != nil {
 		return err
+	}
+
+	if s.scheduler != nil {
+		if err := s.scheduler.LoadClient(); err != nil {
+			return err
+		}
 	}
 
 	return protocol.WriteSimple(conn, "OK")

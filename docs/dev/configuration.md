@@ -70,3 +70,26 @@ cron:
 
 - **Cron:** Schedules use UTC. Times missed during downtime do not run. With more than one server, each one pushes the job.
 - **Throttles:** `concurrency` is a limit for all workers, and `worker` is a limit for each worker. `timeout` has a default of 60 seconds. A full throttle makes `FETCH` skip to the next queue.
+
+### Cron from the app
+
+Since 0.6.0, an app can also declare its cron entries in its own code or config, without access to `CONF_DIR`. The client sends them with `SCHEDULE`, and the server saves them on disk. A worker of an official client sends its declared entries each time it starts. This is the model of topic subscriptions.
+
+```text
+SCHEDULE {"tag":"shop","entries":[{"schedule":"0 0 * * *","job":{"type":"credits.refill","queue":"default","retry":3}}]}
++OK
+UNSCHEDULE {"tag":"shop"}
++OK
+```
+
+- An entry has the same keys and defaults as a `cron` entry of a YAML file: `schedule`, and `job` with `type`, `queue`, `args`, `retry`, `reserve_for`, and `custom`.
+- The entries belong to a tag, the name of the app, such as `shop`. The tag is required, and follows the queue name rule.
+- `SCHEDULE` replaces all entries of the tag. So an entry that the app removes from its code goes away at the next start. `"entries": []` removes the tag.
+- A bad schedule, an entry with no `job.type`, an unknown key, or a job that a push refuses, such as a bad queue name, is an error. Then nothing changes.
+- A tag has at most 256 entries.
+- `UNSCHEDULE` removes all entries of the tag. A missing tag is not an error.
+- The entries stay after a restart, and they do not need a connected worker.
+- The scheduler runs the entries of the YAML files and the entries of all tags together. `SIGHUP` reloads only the YAML files. The entries of the tags stay.
+- `FLUSH` removes the entries of all tags.
+- All processes with one tag must declare the same entries, because the last `SCHEDULE` wins. Give a process with other entries its own tag.
+- `GET /api/v1/schedules` shows the source of each entry: `conf.d`, or `client` with its tag.

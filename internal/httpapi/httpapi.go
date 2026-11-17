@@ -696,12 +696,19 @@ func (a *API) schedules(w http.ResponseWriter, _ *http.Request) {
 
 	if a.options.Scheduler != nil {
 		for _, entry := range a.options.Scheduler.Upcoming() {
-			cronViews = append(cronViews, map[string]any{
+			view := map[string]any{
 				"schedule": entry.Schedule,
 				"jobtype":  entry.JobType,
 				"queue":    entry.Queue,
 				"next":     entry.Next,
-			})
+				"source":   entry.Source,
+			}
+
+			if entry.Source == cron.SourceClient {
+				view["tag"] = entry.Tag
+			}
+
+			cronViews = append(cronViews, view)
 		}
 	}
 

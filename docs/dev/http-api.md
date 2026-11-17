@@ -29,7 +29,7 @@ Do not give the token to a browser. A proxy, such as the web UI image or the Rai
 | GET | `/api/v1/workers` | Worker processes: hostname, pid, tag, queues, threads, busy count, start time, last beat |
 | PATCH | `/api/v1/workers/{wid}` | Change the threads of a worker, or its autoscale. See [Workers](#workers). |
 | GET | `/api/v1/topics` | Topics, their subscriptions, and the connected workers that fetch from each subscription queue. See [topics.md](topics.md#http-api-and-web-ui). |
-| GET | `/api/v1/schedules` | Cron entries with the next run, and throttles in use |
+| GET | `/api/v1/schedules` | Cron entries with the next run, and throttles in use. See [Schedules](#schedules). |
 | GET | `/api/v1/batches` | Batches, up to 200 |
 
 Errors are `{"error":"..."}` with status 400, 401, 409, or 500. A unique lock conflict is 409.
@@ -119,6 +119,19 @@ Each point has `time`, `done`, `failed`, and `threads`. `done` and `failed` add 
 The last point is the current minute or second, and it grows while the period runs. `overview.rate` is the average per second of the last 5 complete seconds.
 
 The server saves each changed minute once a minute and at shutdown, and loads the last 24 hours at boot. After SIGKILL, only the current minute is lost. Seconds are not saved. `METRICS_RETENTION` sets how long saved minutes stay, from 1 hour to 60 days.
+
+## Schedules
+
+`GET /api/v1/schedules` returns `cron` and `throttles`.
+
+```json
+{"cron": [
+  {"schedule": "*/5 * * * *", "jobtype": "Cleanup", "queue": "ops", "next": "2026-11-17T12:05:00Z", "source": "conf.d"},
+  {"schedule": "0 0 * * *", "jobtype": "credits.refill", "queue": "default", "next": "2026-11-18T00:00:00Z", "source": "client", "tag": "shop"}
+], "throttles": []}
+```
+
+Each cron entry has `source`: `conf.d` for an entry of a YAML file in `CONF_DIR`, or `client` for an entry that an app sent with `SCHEDULE`. A `client` entry also has its `tag`. The `conf.d` entries come first, in file order, then the `client` entries, by tag. See [configuration.md](configuration.md#cron-from-the-app).
 
 ## Limits
 

@@ -7,11 +7,13 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 	"time"
 
+	"github.com/thadeu/anway/internal/cron"
 	"github.com/thadeu/anway/internal/httpapi"
 	"github.com/thadeu/anway/internal/job"
 	"github.com/thadeu/anway/internal/manager"
@@ -860,5 +862,46 @@ func TestFailureKeepsTheBacktraceByDefault(t *testing.T) {
 		if len(got.Job.Failure.Backtrace) != c.want {
 			t.Fatalf("backtrace %d: kept %d lines, want %d", c.backtrace, len(got.Job.Failure.Backtrace), c.want)
 		}
+	}
+}
+
+func TestSchedulesShowTheSourceOfEachCronEntry(t *testing.T) {
+	store, err := storage.OpenBolt(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	jobs := manager.New(store)
+	scheduler := cron.New(jobs, slog.New(slog.NewTextHandler(io.Discard, nil)))
+
+	request := cron.ScheduleRequest{Tag: "shop", Entries: []cron.Entry{{Schedule: "0 0 * * *", Job: cron.JobTemplate{Type: "refill"}}}}
+
+	if err := scheduler.Schedule(request); err != nil {
+		t.Fatal(err)
+	}
+
+	server := httptest.NewServer(httpapi.Handler(jobs, httpapi.Options{Token: token, Scheduler: scheduler}))
+
+	t.Cleanup(func() {
+		server.Close()
+		store.Close()
+	})
+
+	f := &fixture{t: t, manager: jobs, server: server}
+
+	var schedules struct {
+		Cron []map[string]any `json:"cron"`
+	}
+
+	f.call("GET", "/api/v1/schedules", nil, &schedules)
+
+	if len(schedules.Cron) != 1 {
+		t.Fatalf("unexpected cron: %+v", schedules.Cron)
+	}
+
+	entry := schedules.Cron[0]
+
+	if entry["source"] != "client" || entry["tag"] != "shop" || entry["jobtype"] != "refill" || entry["queue"] != "default" || entry["next"] == nil {
+		t.Fatalf("a client entry must show its source and tag: %+v", entry)
 	}
 }

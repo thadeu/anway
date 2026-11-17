@@ -40,6 +40,8 @@ The protocol follows the [public Faktory work protocol](https://github.com/contr
 | `PUBLISHB` | An array of up to 1,000 `PUBLISH` arguments. An Anway extension: see [topics.md](topics.md#bulk-publish). | An array with one `{"event","jobs","duplicate","error"}` for each event. The events go in with one write. A refused event does not stop the others. |
 | `SUBSCRIBE` | `{"topic","queue","jobtype","retry","reserve_for"}`. An Anway extension. | `OK` |
 | `UNSUBSCRIBE` | `{"topic","queue","jobtype"}`. An Anway extension. | `OK` |
+| `SCHEDULE` | `{"tag","entries"}`. Each entry is `{"schedule","job"}`, and `job` has the keys of a cron entry in a YAML file: `type`, `queue`, `args`, `retry`, `reserve_for`, `custom`. It replaces all cron entries of the tag. An Anway extension: see [configuration.md](configuration.md#cron-from-the-app). | `OK`, or an error that changes nothing |
+| `UNSCHEDULE` | `{"tag"}`. It removes all cron entries of the tag. A missing tag is not an error. An Anway extension. | `OK` |
 | `BATCH NEW` | `{"parent_bid","description","success","complete"}` | The `bid` |
 | `BATCH OPEN` | `bid` | The `bid` |
 | `BATCH COMMIT` | `bid` | `OK` |

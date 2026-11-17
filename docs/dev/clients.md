@@ -48,13 +48,14 @@ Since version 0.4.0, every client takes the same input names when an app declare
 | `on_dead` | `custom.on_dead` | `{event, queue}`. Its `event` goes to `jobtype`. |
 | `custom` | `custom` | The app's own keys only. The keys above win over a key with the same name here. |
 | `topics` | One `SUBSCRIBE` for each topic | With `event` as the job type, and the `queue`, `retry`, and `reserve_for` of the declaration. For a declaration, not for a push. |
+| `cron` | One entry of a `SCHEDULE` for each schedule | A cron string, or a list of them. The job of each entry has `event` as its type, and the `queue`, `retry`, and `reserve_for` of the declaration. For a declaration, not for a push. |
 
 Names follow the style of each language: `reserve_for` in Ruby, `reserveFor` in JS, `ReserveFor` in Go. Durations are seconds in Ruby and JS, and `time.Duration` in Go.
 
 **Several option sets merge in order.** A declaration can take more than one set: repeated `anway_options` calls in Ruby, or more than one options argument in Go and JS. The merge rules are the same everywhere:
 
 - A single value, such as `queue` or `retry`: the last set that has it wins.
-- `topics`: the topics of all sets add up, in order, with no duplicates.
+- `topics` and `cron`: the values of all sets add up, in order, with no duplicates.
 - `custom`: the hashes merge, and a later key wins.
 
 **The worker API:**
@@ -72,7 +73,7 @@ Names follow the style of each language: `reserve_for` in Ruby, `reserveFor` in 
 ## Layers
 
 1. **Connection:** Socket, TLS, handshake, RESP, reconnect, and pool.
-2. **Client:** Push, bulk push, fetch, ack, fail, batch, track, queue, mutate, info, and the topic commands, with bulk publish.
+2. **Client:** Push, bulk push, fetch, ack, fail, batch, track, queue, mutate, info, and the topic commands, with bulk publish, and the schedule commands.
 3. **Worker:** Concurrency, heartbeat, quiet, terminate, job registry, and middleware.
 4. **Framework integration:** Rails only, for now.
 
@@ -96,6 +97,14 @@ Names follow the style of each language: `reserve_for` in Ruby, `reserveFor` in 
 
 - Topics are part of the protocol. Every client library implements `publish`, `subscribe`, and `unsubscribe`, and lets a worker declare its subscriptions with the `topics` key of the [input contract](#input-contract), and send them with `SUBSCRIBE` when it starts. See [topics.md](topics.md#client-requirements).
 - It passes scenarios T01 to T06.
+
+## Schedules
+
+- Every client implements `schedule(tag, entries)`, which sends `SCHEDULE`, and `unschedule(tag)`, which sends `UNSCHEDULE`. An entry has a `schedule` and a `job`, with the keys of a cron entry in a YAML file. See [configuration.md](configuration.md#cron-from-the-app).
+- A worker declares cron entries with the `cron` key of the [input contract](#input-contract). When it starts, before its first `FETCH`, it sends all its entries in one `SCHEDULE` with its tag. A client can add other places to declare entries, such as a config file, and the worker sends all of them in the same `SCHEDULE`.
+- A worker with entries and no tag does not start, and gives a clear error. A default tag can join the entries of two apps on one server, so the client does not make one.
+- A worker with no entries sends no `SCHEDULE`, so it does not remove the entries that another process sent for its tag. To remove the last entry of a tag, call `unschedule(tag)`.
+- It passes scenarios S01 to S03.
 
 ## Worker threads
 

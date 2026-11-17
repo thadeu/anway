@@ -26,20 +26,47 @@ import (
 
 const defaultThrottleTimeout = 60
 
+// Sources of a cron entry.
+const (
+	SourceConf   = "conf.d"
+	SourceClient = "client"
+)
+
+// MaxClientEntries is the most entries that one SCHEDULE tag can have.
+const MaxClientEntries = 256
+
+// JobTemplate is the job of a cron entry. A conf.d file and SCHEDULE use the
+// same keys.
 type JobTemplate struct {
-	Type       string         `yaml:"type"`
-	Queue      string         `yaml:"queue"`
-	Args       []any          `yaml:"args"`
-	Retry      *int           `yaml:"retry"`
-	ReserveFor int            `yaml:"reserve_for"`
-	Custom     map[string]any `yaml:"custom"`
+	Type       string         `yaml:"type" json:"type"`
+	Queue      string         `yaml:"queue" json:"queue,omitempty"`
+	Args       []any          `yaml:"args" json:"args,omitempty"`
+	Retry      *int           `yaml:"retry" json:"retry,omitempty"`
+	ReserveFor int            `yaml:"reserve_for" json:"reserve_for,omitempty"`
+	Custom     map[string]any `yaml:"custom" json:"custom,omitempty"`
 }
 
 type Entry struct {
-	Schedule string      `yaml:"schedule"`
-	Job      JobTemplate `yaml:"job"`
+	Schedule string      `yaml:"schedule" json:"schedule"`
+	Job      JobTemplate `yaml:"job" json:"job"`
 
 	parsed schedule.Schedule
+}
+
+// prepare parses the schedule and checks that the job has a type.
+func (e *Entry) prepare() error {
+	parsed, err := schedule.ParseStandard(e.Schedule)
+	if err != nil {
+		return fmt.Errorf("invalid schedule %q: %w", e.Schedule, err)
+	}
+
+	if e.Job.Type == "" {
+		return fmt.Errorf("cron entry %q has no job type", e.Schedule)
+	}
+
+	e.parsed = parsed
+
+	return nil
 }
 
 type ThrottleSetting struct {
@@ -76,18 +103,9 @@ func LoadSettings(dir string) (Settings, error) {
 	}
 
 	for i := range merged.Entries {
-		entry := &merged.Entries[i]
-
-		parsed, err := schedule.ParseStandard(entry.Schedule)
-		if err != nil {
-			return merged, fmt.Errorf("invalid schedule %q: %w", entry.Schedule, err)
+		if err := merged.Entries[i].prepare(); err != nil {
+			return merged, err
 		}
-
-		if entry.Job.Type == "" {
-			return merged, fmt.Errorf("cron entry %q has no job type", entry.Schedule)
-		}
-
-		entry.parsed = parsed
 	}
 
 	for queue, throttle := range merged.ThrottleTable {
@@ -156,40 +174,224 @@ func (s Settings) Throttles() map[string]storage.Throttle {
 }
 
 // Scheduler pushes each entry at its next UTC time. Times missed during
-// downtime do not run.
+// downtime do not run. It runs the conf.d entries and the client entries of
+// all tags together.
 type Scheduler struct {
 	manager *manager.Manager
 	log     *slog.Logger
 
 	mu      sync.Mutex
-	entries []Entry
+	conf    []Entry
+	client  map[string][]Entry
+	entries []scheduled
 	next    []time.Time
 }
 
-func New(m *manager.Manager, log *slog.Logger) *Scheduler {
-	return &Scheduler{manager: m, log: log}
+// scheduled is one entry with the place it came from.
+type scheduled struct {
+	Entry
+
+	source string
+	tag    string
 }
 
+func New(m *manager.Manager, log *slog.Logger) *Scheduler {
+	return &Scheduler{manager: m, log: log, client: map[string][]Entry{}}
+}
+
+// SetEntries replaces the conf.d entries. The client entries stay.
 func (s *Scheduler) SetEntries(entries []Entry) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	s.conf = entries
+	s.rebuild()
+}
+
+// rebuild makes the list of all entries, and the next run of each one. The
+// caller holds the lock.
+func (s *Scheduler) rebuild() {
 	now := time.Now().UTC()
 
-	s.entries = entries
-	s.next = make([]time.Time, len(entries))
+	tags := make([]string, 0, len(s.client))
 
-	for i, entry := range entries {
+	for tag := range s.client {
+		tags = append(tags, tag)
+	}
+
+	sort.Strings(tags)
+
+	s.entries = make([]scheduled, 0, len(s.conf))
+
+	for _, entry := range s.conf {
+		s.entries = append(s.entries, scheduled{Entry: entry, source: SourceConf})
+	}
+
+	for _, tag := range tags {
+		for _, entry := range s.client[tag] {
+			s.entries = append(s.entries, scheduled{Entry: entry, source: SourceClient, tag: tag})
+		}
+	}
+
+	s.next = make([]time.Time, len(s.entries))
+
+	for i, entry := range s.entries {
 		s.next[i] = entry.parsed.Next(now)
 	}
 }
 
-// Upcoming is one cron entry with its next run.
+// ScheduleRequest is the SCHEDULE argument: all cron entries of one client tag.
+type ScheduleRequest struct {
+	Tag     string  `json:"tag"`
+	Entries []Entry `json:"entries"`
+}
+
+// Schedule replaces the client entries of a tag, and saves them. No entries
+// removes the tag. An invalid entry changes nothing.
+func (s *Scheduler) Schedule(request ScheduleRequest) error {
+	if err := checkTag(request.Tag); err != nil {
+		return err
+	}
+
+	if len(request.Entries) > MaxClientEntries {
+		return fmt.Errorf("a tag has at most %d cron entries", MaxClientEntries)
+	}
+
+	for i := range request.Entries {
+		if err := checkClientEntry(&request.Entries[i]); err != nil {
+			return err
+		}
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if len(request.Entries) == 0 {
+		return s.removeLocked(request.Tag)
+	}
+
+	encoded, err := json.Marshal(request.Entries)
+	if err != nil {
+		return err
+	}
+
+	if err := s.manager.SaveSchedule(request.Tag, encoded); err != nil {
+		return err
+	}
+
+	s.client[request.Tag] = request.Entries
+	s.rebuild()
+
+	return nil
+}
+
+// Unschedule removes the client entries of a tag. A missing tag is not an
+// error.
+func (s *Scheduler) Unschedule(tag string) error {
+	if err := checkTag(tag); err != nil {
+		return err
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	return s.removeLocked(tag)
+}
+
+func (s *Scheduler) removeLocked(tag string) error {
+	if err := s.manager.DeleteSchedule(tag); err != nil {
+		return err
+	}
+
+	delete(s.client, tag)
+	s.rebuild()
+
+	return nil
+}
+
+// LoadClient reads the saved client entries, for example at boot. A saved
+// tag that this version cannot read is logged and skipped, so the server
+// still starts.
+func (s *Scheduler) LoadClient() error {
+	saved, err := s.manager.Schedules()
+	if err != nil {
+		return err
+	}
+
+	client := map[string][]Entry{}
+
+	for _, current := range saved {
+		entries, err := decodeClient(current.Entries)
+		if err != nil {
+			s.log.Error("saved schedule skipped", "tag", current.Tag, "error", err)
+
+			continue
+		}
+
+		client[current.Tag] = entries
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.client = client
+	s.rebuild()
+
+	return nil
+}
+
+func decodeClient(raw json.RawMessage) ([]Entry, error) {
+	var entries []Entry
+
+	if err := json.Unmarshal(raw, &entries); err != nil {
+		return nil, err
+	}
+
+	for i := range entries {
+		if err := checkClientEntry(&entries[i]); err != nil {
+			return nil, err
+		}
+	}
+
+	return entries, nil
+}
+
+func checkTag(tag string) error {
+	if !job.ValidQueue(tag) {
+		return fmt.Errorf("invalid tag: %q", tag)
+	}
+
+	return nil
+}
+
+// checkClientEntry prepares an entry and checks its job as a push would, so
+// that a bad queue or reserve_for fails at SCHEDULE, not at each run.
+func checkClientEntry(entry *Entry) error {
+	if err := entry.prepare(); err != nil {
+		return err
+	}
+
+	built, err := entry.Job.build()
+	if err != nil {
+		return err
+	}
+
+	if err := built.Normalize(time.Now()); err != nil {
+		return fmt.Errorf("cron entry %q: %w", entry.Schedule, err)
+	}
+
+	return nil
+}
+
+// Upcoming is one cron entry with its next run. Source is SourceConf or
+// SourceClient. Tag is the client tag, blank for conf.d.
 type Upcoming struct {
 	Schedule string
 	JobType  string
 	Queue    string
 	Next     time.Time
+	Source   string
+	Tag      string
 }
 
 func (s *Scheduler) Upcoming() []Upcoming {
@@ -204,7 +406,14 @@ func (s *Scheduler) Upcoming() []Upcoming {
 			queue = job.DefaultQueue
 		}
 
-		upcoming = append(upcoming, Upcoming{Schedule: entry.Schedule, JobType: entry.Job.Type, Queue: queue, Next: s.next[i]})
+		upcoming = append(upcoming, Upcoming{
+			Schedule: entry.Schedule,
+			JobType:  entry.Job.Type,
+			Queue:    queue,
+			Next:     s.next[i],
+			Source:   entry.source,
+			Tag:      entry.tag,
+		})
 	}
 
 	return upcoming

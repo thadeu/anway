@@ -780,3 +780,62 @@ func TestPushBulkSurvivesKill(t *testing.T) {
 		t.Fatalf("%d of 500 bulk jobs survived kill -9", len(survivors))
 	}
 }
+
+// TestScheduleSurvivesKill kills the server right after SCHEDULE replies. The
+// client cron entries must be back after the restart, with no worker.
+func TestScheduleSurvivesKill(t *testing.T) {
+	binary := filepath.Join(t.TempDir(), "server")
+
+	build := exec.Command("go", "build", "-o", binary, "github.com/thadeu/anway/cmd/server")
+	if output, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("build failed: %s", output)
+	}
+
+	dir := t.TempDir()
+	addr := freeAddr(t)
+	web := freeAddr(t)
+
+	t.Setenv("WEB_ADDR", web)
+
+	server := startServer(t, binary, dir, addr)
+
+	client, err := testclient.Dial(addr, "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	schedule := `{"tag":"shop","entries":[{"schedule":"0 0 * * *","job":{"type":"credits.refill"}}]}`
+
+	if _, err := client.Command("SCHEDULE", schedule); err != nil {
+		t.Fatal(err)
+	}
+
+	client.Close()
+	server.Process.Kill()
+	server.Wait()
+
+	startServer(t, binary, dir, addr)
+
+	again, err := testclient.Dial(addr, "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	again.Close()
+
+	response, err := http.Get("http://" + web + "/api/v1/schedules")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var listed struct {
+		Cron []map[string]any `json:"cron"`
+	}
+
+	json.NewDecoder(response.Body).Decode(&listed)
+	response.Body.Close()
+
+	if len(listed.Cron) != 1 || listed.Cron[0]["tag"] != "shop" || listed.Cron[0]["jobtype"] != "credits.refill" {
+		t.Fatalf("the client entries must survive kill -9: %+v", listed.Cron)
+	}
+}

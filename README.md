@@ -40,7 +40,7 @@ Configure the server with env vars or flags. See [docs/dev/configuration.md](doc
 - Queues with priority order, pause, and resume.
 - Scheduled jobs, retries with backoff, and a dead set.
 - `MUTATE` for retries, scheduled jobs, and the dead set.
-- Cron, unique jobs, expiring jobs, and queue throttling.
+- Cron from YAML files or from the app (`SCHEDULE`), unique jobs, expiring jobs, and queue throttling.
 - Batches with callbacks and child batches, and job tracking.
 - A death hook that pushes a notice job when a job dies.
 - An HTTP API for the web UI.

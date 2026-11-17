@@ -26,6 +26,7 @@ Other components use only the storage interface, so the engine can change later.
 | `metrics` | Minute | JSON | Done and failed counts for each minute, the peak of worker threads (`t`), and done counts for each queue |
 | `worker_settings` | Worker name (hostname, NUL, tag) | JSON | The threads or autoscale that an operator saved for the name |
 | `subscriptions` | Topic, NUL, queue, NUL, job type | JSON | Topic subscriptions |
+| `schedules` | Tag | JSON | The cron entries that a client sent with `SCHEDULE` for the tag |
 | `meta` | Name | Value | Metadata, such as the schema version |
 
 `seq` comes from `Bucket.NextSequence`. `seq` and `time` are big-endian `uint64` values, so key order equals time order.

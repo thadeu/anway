@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/thadeu/anway/internal/cron"
 	"github.com/thadeu/anway/internal/manager"
 	"github.com/thadeu/anway/internal/server"
 	"github.com/thadeu/anway/internal/storage"
@@ -18,14 +19,21 @@ import (
 )
 
 type fixture struct {
-	addr    string
-	dir     string
-	manager *manager.Manager
-	server  *server.Server
-	store   *storage.Bolt
+	addr      string
+	dir       string
+	manager   *manager.Manager
+	scheduler *cron.Scheduler
+	server    *server.Server
+	store     *storage.Bolt
 }
 
 func start(t *testing.T, dir, password string) *fixture {
+	t.Helper()
+
+	return startWith(t, dir, server.Options{Password: password})
+}
+
+func startWith(t *testing.T, dir string, options server.Options) *fixture {
 	t.Helper()
 
 	store, err := storage.OpenBolt(dir)
@@ -38,8 +46,12 @@ func start(t *testing.T, dir, password string) *fixture {
 		t.Fatal(err)
 	}
 
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
 	jobs := manager.New(store)
-	srv := server.New(jobs, server.Options{Password: password}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	scheduler := cron.New(jobs, log)
+
+	options.Scheduler = scheduler
+	srv := server.New(jobs, options, log)
 
 	go srv.Serve(context.Background(), listener)
 
@@ -49,7 +61,7 @@ func start(t *testing.T, dir, password string) *fixture {
 		store.Close()
 	})
 
-	return &fixture{addr: listener.Addr().String(), dir: dir, manager: jobs, server: srv, store: store}
+	return &fixture{addr: listener.Addr().String(), dir: dir, manager: jobs, scheduler: scheduler, server: srv, store: store}
 }
 
 func dial(t *testing.T, f *fixture, wid string) *testclient.Client {
@@ -1327,5 +1339,88 @@ func TestPublishBulkOverTCP(t *testing.T) {
 
 	if got := reply(`PUBLISHB {"topic":"order.paid"}`); !strings.HasPrefix(got, "-ERR") {
 		t.Fatalf("an argument that is not an array must be an error: %q", got)
+	}
+}
+
+func TestScheduleAndUnscheduleOverTCP(t *testing.T) {
+	f := startWith(t, t.TempDir(), server.Options{AllowFlush: true})
+	client := dial(t, f, "")
+
+	command := func(verb, args string) error {
+		_, err := client.Command(verb, args)
+
+		return err
+	}
+
+	upcoming := func() []string {
+		var list []string
+
+		for _, entry := range f.scheduler.Upcoming() {
+			list = append(list, entry.Source+"/"+entry.Tag+"/"+entry.JobType+"/"+entry.Queue)
+		}
+
+		return list
+	}
+
+	valid := `{"tag":"shop","entries":[{"schedule":"0 0 * * *","job":{"type":"credits.refill","queue":"billing","retry":3,"args":[],"reserve_for":0,"custom":{}}}]}`
+
+	if err := command("SCHEDULE", valid); err != nil {
+		t.Fatalf("SCHEDULE: %v", err)
+	}
+
+	if got := upcoming(); len(got) != 1 || got[0] != "client/shop/credits.refill/billing" {
+		t.Fatalf("SCHEDULE must add the entry: %v", got)
+	}
+
+	refused := []string{
+		`{"tag":"shop","entries":[{"schedule":"bad","job":{"type":"a"}}]}`,
+		`{"tag":"shop","entries":[{"schedule":"0 0 * * *","job":{"queue":"a"}}]}`,
+		`{"tag":"shop","entries":[{"schedule":"0 0 * * *","job":{"type":"a","qeue":"a"}}]}`,
+		`{"entries":[{"schedule":"0 0 * * *","job":{"type":"a"}}]}`,
+		`not json`,
+	}
+
+	for _, args := range refused {
+		if err := command("SCHEDULE", args); err == nil {
+			t.Fatalf("SCHEDULE must fail: %s", args)
+		}
+	}
+
+	if got := upcoming(); len(got) != 1 {
+		t.Fatalf("a refused SCHEDULE must change nothing: %v", got)
+	}
+
+	if err := command("SCHEDULE", `{"tag":"shop","entries":[]}`); err != nil {
+		t.Fatalf("SCHEDULE with no entries: %v", err)
+	}
+
+	if got := upcoming(); len(got) != 0 {
+		t.Fatalf("no entries must remove the tag: %v", got)
+	}
+
+	if err := command("SCHEDULE", valid); err != nil {
+		t.Fatal(err)
+	}
+
+	for range 2 {
+		if err := command("UNSCHEDULE", `{"tag":"shop"}`); err != nil {
+			t.Fatalf("UNSCHEDULE: %v", err)
+		}
+	}
+
+	if got := upcoming(); len(got) != 0 {
+		t.Fatalf("UNSCHEDULE must remove the tag: %v", got)
+	}
+
+	if err := command("SCHEDULE", valid); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := client.Command("FLUSH", nil); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := upcoming(); len(got) != 0 {
+		t.Fatalf("FLUSH must remove the client entries: %v", got)
 	}
 }

@@ -157,7 +157,19 @@ func run() error {
 	if err := jobs.RestoreMetrics(cfg.MetricsRetention); err != nil {
 		return err
 	}
-	srv := server.New(jobs, server.Options{Password: cfg.Password, AllowFlush: cfg.AllowFlush}, log)
+
+	scheduler := cron.New(jobs, log)
+
+	if err := scheduler.LoadClient(); err != nil {
+		return err
+	}
+
+	if err := applySettings(cfg.ConfDir, jobs, scheduler); err != nil {
+		return err
+	}
+
+	srv := server.New(jobs, server.Options{Password: cfg.Password, AllowFlush: cfg.AllowFlush, Scheduler: scheduler}, log)
+
 	loopCtx, stopLoop := context.WithCancel(context.Background())
 
 	var loops sync.WaitGroup
@@ -166,12 +178,6 @@ func run() error {
 		stopLoop()
 		loops.Wait()
 	}()
-
-	scheduler := cron.New(jobs, log)
-
-	if err := applySettings(cfg.ConfDir, jobs, scheduler); err != nil {
-		return err
-	}
 
 	loops.Go(func() { scheduler.Run(loopCtx) })
 	loops.Go(func() { reloadOnHangup(loopCtx, cfg.ConfDir, jobs, scheduler, log) })

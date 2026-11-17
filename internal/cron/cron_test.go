@@ -137,3 +137,196 @@ func TestCustomFieldsAndArgsReachTheJob(t *testing.T) {
 		t.Fatalf("unexpected job: %+v", built)
 	}
 }
+
+func newScheduler(t *testing.T, store *storage.Bolt) (*Scheduler, *manager.Manager) {
+	t.Helper()
+
+	jobs := manager.New(store)
+
+	return New(jobs, slog.New(slog.NewTextHandler(io.Discard, nil))), jobs
+}
+
+func openStore(t *testing.T, dir string) *storage.Bolt {
+	t.Helper()
+
+	store, err := storage.OpenBolt(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	return store
+}
+
+func entry(spec, jobtype string) Entry {
+	return Entry{Schedule: spec, Job: JobTemplate{Type: jobtype, Queue: "ops"}}
+}
+
+func sources(upcoming []Upcoming) []string {
+	var list []string
+
+	for _, current := range upcoming {
+		list = append(list, current.Source+"/"+current.Tag+"/"+current.JobType)
+	}
+
+	return list
+}
+
+func TestScheduleReplacesTheEntriesOfATag(t *testing.T) {
+	store := openStore(t, t.TempDir())
+	defer store.Close()
+
+	scheduler, _ := newScheduler(t, store)
+
+	if err := scheduler.Schedule(ScheduleRequest{Tag: "shop", Entries: []Entry{entry("0 0 * * *", "a"), entry("*/5 * * * *", "b")}}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := scheduler.Schedule(ScheduleRequest{Tag: "shop", Entries: []Entry{entry("0 0 * * *", "c")}}); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := sources(scheduler.Upcoming()); len(got) != 1 || got[0] != "client/shop/c" {
+		t.Fatalf("a second SCHEDULE must replace the entries: %v", got)
+	}
+
+	if err := scheduler.Schedule(ScheduleRequest{Tag: "shop", Entries: []Entry{}}); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := scheduler.Upcoming(); len(got) != 0 {
+		t.Fatalf("no entries must remove the tag: %v", got)
+	}
+
+	saved, err := store.Schedules()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(saved) != 0 {
+		t.Fatalf("the removed tag must not stay on disk: %+v", saved)
+	}
+}
+
+func TestInvalidScheduleChangesNothing(t *testing.T) {
+	store := openStore(t, t.TempDir())
+	defer store.Close()
+
+	scheduler, _ := newScheduler(t, store)
+
+	if err := scheduler.Schedule(ScheduleRequest{Tag: "shop", Entries: []Entry{entry("0 0 * * *", "a")}}); err != nil {
+		t.Fatal(err)
+	}
+
+	tooMany := make([]Entry, MaxClientEntries+1)
+
+	for i := range tooMany {
+		tooMany[i] = entry("0 0 * * *", "a")
+	}
+
+	cases := []ScheduleRequest{
+		{Tag: "shop", Entries: []Entry{entry("0 0 * * *", "b"), entry("bad", "c")}},
+		{Tag: "shop", Entries: []Entry{entry("0 0 * * *", "")}},
+		{Tag: "shop", Entries: []Entry{{Schedule: "0 0 * * *", Job: JobTemplate{Type: "a", Queue: "bad queue"}}}},
+		{Tag: "shop", Entries: []Entry{{Schedule: "0 0 * * *", Job: JobTemplate{Type: "a", ReserveFor: 5}}}},
+		{Tag: "shop", Entries: tooMany},
+		{Tag: "", Entries: []Entry{entry("0 0 * * *", "a")}},
+		{Tag: "bad tag", Entries: []Entry{entry("0 0 * * *", "a")}},
+	}
+
+	for _, request := range cases {
+		if err := scheduler.Schedule(request); err == nil {
+			t.Fatalf("SCHEDULE must fail: %+v", request)
+		}
+	}
+
+	if got := sources(scheduler.Upcoming()); len(got) != 1 || got[0] != "client/shop/a" {
+		t.Fatalf("a refused SCHEDULE must change nothing: %v", got)
+	}
+}
+
+func TestClientEntriesSurviveARestartAndAReload(t *testing.T) {
+	dir := t.TempDir()
+	store := openStore(t, dir)
+	scheduler, _ := newScheduler(t, store)
+
+	if err := scheduler.Schedule(ScheduleRequest{Tag: "shop", Entries: []Entry{entry("0 0 * * *", "a")}}); err != nil {
+		t.Fatal(err)
+	}
+
+	store.Close()
+
+	store = openStore(t, dir)
+	defer store.Close()
+
+	scheduler, _ = newScheduler(t, store)
+
+	if err := scheduler.LoadClient(); err != nil {
+		t.Fatal(err)
+	}
+
+	scheduler.SetEntries([]Entry{prepared(t, "*/5 * * * *", "conf")})
+
+	got := sources(scheduler.Upcoming())
+
+	if len(got) != 2 || got[0] != "conf.d//conf" || got[1] != "client/shop/a" {
+		t.Fatalf("conf.d and client entries must run together: %v", got)
+	}
+
+	scheduler.SetEntries(nil)
+
+	if got := sources(scheduler.Upcoming()); len(got) != 1 || got[0] != "client/shop/a" {
+		t.Fatalf("a conf.d reload must keep the client entries: %v", got)
+	}
+
+	if err := scheduler.Unschedule("shop"); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := scheduler.Unschedule("shop"); err != nil {
+		t.Fatalf("a missing tag is not an error: %v", err)
+	}
+
+	if got := scheduler.Upcoming(); len(got) != 0 {
+		t.Fatalf("UNSCHEDULE must remove the tag: %v", got)
+	}
+}
+
+func TestSchedulerPushesClientEntries(t *testing.T) {
+	store := openStore(t, t.TempDir())
+	defer store.Close()
+
+	scheduler, jobs := newScheduler(t, store)
+	retry := 3
+
+	request := ScheduleRequest{Tag: "shop", Entries: []Entry{{
+		Schedule: "*/5 * * * *",
+		Job:      JobTemplate{Type: "refill", Queue: "billing", Retry: &retry, Args: []any{1}},
+	}}}
+
+	if err := scheduler.Schedule(request); err != nil {
+		t.Fatal(err)
+	}
+
+	scheduler.Tick(time.Now().UTC().Add(6 * time.Minute))
+
+	stats, err := jobs.Stats()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if stats.Queues["billing"] != 1 {
+		t.Fatalf("the client entry must push its job: %+v", stats)
+	}
+}
+
+func prepared(t *testing.T, spec, jobtype string) Entry {
+	t.Helper()
+
+	current := entry(spec, jobtype)
+
+	if err := current.prepare(); err != nil {
+		t.Fatal(err)
+	}
+
+	return current
+}

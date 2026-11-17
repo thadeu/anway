@@ -2,6 +2,7 @@
 package storage
 
 import (
+	"encoding/json"
 	"errors"
 	"time"
 
@@ -146,6 +147,9 @@ type Store interface {
 	Subscriptions(topic string) ([]Subscription, error)
 	Publish(event Event, now time.Time) (Published, error)
 	PublishBulk(events []Event, now time.Time) ([]Published, []error, error)
+	SaveSchedule(tag string, entries json.RawMessage, now time.Time) error
+	DeleteSchedule(tag string) error
+	Schedules() ([]ClientSchedule, error)
 	Flush() error
 	Close() error
 }
