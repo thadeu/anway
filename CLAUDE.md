@@ -13,6 +13,23 @@ Language-agnostic background job server in Go, with embedded disk storage. Read 
 - **Dependencies:** Keep few dependencies. Discuss a new dependency before you add it.
 - **Scope:** Implement only the current phase in `SPEC.md`.
 
+## Versions and releases
+
+The server and all its children have one version number. A version bump of the server is a bump of every child, in the same release, also when a child has no change. Never release the server alone.
+
+| Child | Where the version is |
+|---|---|
+| `anway-go` | The git tag `vX.Y.Z`, and `SERVER_VERSION: vX.Y.Z` in `.github/workflows/ci.yml` |
+| `anway-ruby` | `VERSION` and `SERVER_VERSION` in `lib/anway/version.rb`, then the tag |
+| `anway-js` | `version` in `packages/client/package.json`, and `SERVER_VERSION: vX.Y.Z` in `.github/workflows/ci.yml` and `release.yml`, then the tag |
+| `anway-webui` | The git tag, and `ANWAY_VERSION` in `.github/workflows/test.yml` |
+| `anway-lp` | `version` in `lib/site.ts`, "The current release" in `content/docs/reference/versions.mdx`, and each "Since X.Y.Z" of the new parts |
+| `anway-cloud` | `version` in `config/cloud.yml` (the floor), and the images in `.voodu/jobs.voodu` and `.voodu/web.voodu` (`anway-webui`) |
+
+- Each child tests against the server release of the same version. Before that release exists, test against a server built from the change (`SERVER_BIN`).
+- Release order: the server tag first, and wait for its release and image. Then `anway-go`, `anway-ruby` and `anway-js` (each one: push `main`, wait for a green CI, then the tag, because a published version cannot be used again). Then `anway-webui`. Then `anway-lp` with a `tag(patch):` commit, which deploys the site. Then `anway-cloud`.
+- A new command or field in the server needs the same change in every client: see `docs/dev/clients.md` and `conformance/scenarios.md`.
+
 ## Documents
 
 - `SPEC.md`: What to build. Update it when a requirement changes.
