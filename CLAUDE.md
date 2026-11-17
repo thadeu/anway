@@ -29,6 +29,8 @@ The server and all its children have one version number. A version bump of the s
 - Each child tests against the server release of the same version. Before that release exists, test against a server built from the change (`SERVER_BIN`).
 - Release order: the server tag first, and wait for its release and image. Then `anway-go`, `anway-ruby` and `anway-js` (each one: push `main`, wait for a green CI, then the tag, because a published version cannot be used again). Then `anway-webui`. Then `anway-lp` with a `tag(patch):` commit, which deploys the site. Then `anway-cloud`.
 - A new command or field in the server needs the same change in every client: see `docs/dev/clients.md` and `conformance/scenarios.md`.
+- `anway-cloud`: a customer upgrades a server from the Cloud web ("Check for updates" finds the newest release whose image exists), with no Cloud deploy. The Cloud deploy is still needed for its console image (`anway-webui`) and the floor in `config/cloud.yml`.
+- `anway-webui` runs one image in front of servers of older versions (Anway Cloud upgrades a server only when its owner asks). A page that uses a new server field or route keeps working with the previous server version: it hides what needs the new server and says which version it needs.
 
 ## Documents
 
