@@ -187,26 +187,27 @@ func (b *Bolt) CronRuns() (map[string][]CronRun, error) {
 }
 
 // KeepCronRuns removes the runs of every entry that is not in ids, such as an
-// entry that a deploy removed.
+// entry that a deploy removed. It reads first, so it writes only when an
+// entry is gone: a boot or a SCHEDULE with the same entries costs no sync.
 func (b *Bolt) KeepCronRuns(ids []string) error {
-	return b.write(func(tx *bolt.Tx) error {
-		bucket := tx.Bucket(bucketCronRuns)
+	var gone [][]byte
 
-		var gone [][]byte
-
-		err := bucket.ForEach(func(key, _ []byte) error {
+	err := b.db.View(func(tx *bolt.Tx) error {
+		return tx.Bucket(bucketCronRuns).ForEach(func(key, _ []byte) error {
 			if !slices.Contains(ids, string(key)) {
 				gone = append(gone, slices.Clone(key))
 			}
 
 			return nil
 		})
-		if err != nil {
-			return err
-		}
+	})
+	if err != nil || len(gone) == 0 {
+		return err
+	}
 
+	return b.write(func(tx *bolt.Tx) error {
 		for _, key := range gone {
-			if err := bucket.Delete(key); err != nil {
+			if err := tx.Bucket(bucketCronRuns).Delete(key); err != nil {
 				return err
 			}
 		}
